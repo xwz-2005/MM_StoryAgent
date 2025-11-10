@@ -1,7 +1,7 @@
 # MM-StoryAgent 60分总结
 
 ## 一、使用指南
-#### 1.在仓库拉取zy分支的代码
+#### 1.在仓库拉取dev分支的代码
 #### 2.基础环境配置（pip或者anaconda）
    ```python
    # 这是pip的：
