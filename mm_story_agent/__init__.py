@@ -9,7 +9,9 @@ _import_structure = {
         'MusicGenAgent',
         'AudioLDM2Agent',
         'CosyVoiceAgent',
+        'EdgeTTSAgent',  # 免费Edge-TTS语音合成
         'StoryDiffusionAgent',
+        'DashScopeImageAgent',  # 任务2：新增API图像生成Agent
         'QwenAgent',
         'FreesoundSfxAgent',
         'FreesoundMusicAgent'

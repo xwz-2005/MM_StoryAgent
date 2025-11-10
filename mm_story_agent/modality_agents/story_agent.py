@@ -6,7 +6,7 @@ from tqdm import trange, tqdm
 
 from ..utils.llm_output_check import parse_list
 from ..base import register_tool, init_tool_instance
-from ..prompts_en import question_asker_system, expert_system, \
+from ..prompts_zh import question_asker_system, expert_system, \
     dlg_based_writer_system, dlg_based_writer_prompt, chapter_writer_system
 
 
@@ -137,6 +137,6 @@ class QAOutlineStoryWriter:
         return all_pages
 
     def call(self, params):
-        outline = self.generate_outline(params)
-        pages = self.generate_story_from_outline(outline)
+        outline = self.generate_outline(params)  # 第一步：生成大纲
+        pages = self.generate_story_from_outline(outline)  # 第二步：生成详细故事
         return pages

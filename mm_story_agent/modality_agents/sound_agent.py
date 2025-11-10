@@ -6,7 +6,7 @@ import torch
 import soundfile as sf
 from diffusers import AudioLDM2Pipeline
 
-from mm_story_agent.prompts_en import story_to_sound_reviser_system, story_to_sound_review_system
+from mm_story_agent.prompts_zh import story_to_sound_reviser_system, story_to_sound_review_system
 from mm_story_agent.base import register_tool, init_tool_instance
 
 

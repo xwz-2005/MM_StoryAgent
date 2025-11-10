@@ -1,0 +1,20 @@
+# 语言配置文件
+# 修改这个文件来切换中英文模式
+
+language: "zh"  # 可选值: "zh" (中文) 或 "en" (英文)
+
+# 中文配置
+zh:
+  story_topic: "森林男孩寻宝记"
+  main_role: "一个勇敢的小男孩"
+  scene: "神秘的大森林"
+  voice: "zh-CN-XiaoxiaoNeural"
+  prompts_file: "prompts_zh"
+
+# 英文配置  
+en:
+  story_topic: "Time Management: A child learning how to manage their time effectively."
+  main_role: "a little boy"
+  scene: "a big city"
+  voice: "en-US-GuyNeural"
+  prompts_file: "prompts_en"

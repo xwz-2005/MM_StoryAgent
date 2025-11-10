@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 from typing import List, Dict
+import asyncio
 
 from aliyunsdkcore.client import AcsClient
 from aliyunsdkcore.request import CommonRequest
@@ -9,7 +10,9 @@ import nls
 
 from mm_story_agent.base import register_tool
 
-
+"""
+    这个文件实现了一个文本转语音(TTS)系统，将故事文本转换为语音旁白，使用阿里云的CosyVoice服务。
+"""
 # Due to the trouble regarding environment, we use dashscope to deploy and call the API for CosyVoice.
 class CosyVoiceSynthesizer:
 
@@ -58,18 +61,26 @@ class CosyVoiceSynthesizer:
             if writer is not None:
                 writer.close()
 
-        sdk = nls.NlsStreamInputTtsSynthesizer(
-            url='wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1',
+        # 修复：使用正确的API - NlsSpeechSynthesizer
+        # 启用 long_tts=True 以支持 CosyVoice 音色（如 longyuan）
+        sdk = nls.NlsSpeechSynthesizer(
+            url='wss://nls-gateway.cn-shanghai.aliyuncs.com/ws/v1',
             token=self.token,
             appkey=self.app_key,
+            long_tts=True,  # 启用长文本/CosyVoice支持
             on_data=write_data,
             on_error=raise_error,
             on_close=close_file,
         )
 
-        sdk.startStreamInputTts(voice=voice, sample_rate=sample_rate, aformat='wav')
-        sdk.sendStreamInputTts(transcript,)
-        sdk.stopStreamInputTts()
+        # 修复：使用 start() 方法，传入完整文本
+        sdk.start(
+            text=transcript,
+            voice=voice,
+            aformat='wav',
+            sample_rate=sample_rate,
+            wait_complete=True
+        )
 
 
 @register_tool("cosyvoice_tts")
@@ -91,6 +102,67 @@ class CosyVoiceAgent:
                 sample_rate=self.cfg.get("sample_rate", 16000)
             )
 
+        return {
+            "modality": "speech"
+        }
+
+
+# ==================== 免费 Edge-TTS 语音合成 ====================
+
+class EdgeTTSSynthesizer:
+    """
+    使用微软 Edge-TTS 的免费语音合成
+    优点：
+    1. 完全免费
+    2. 无需API密钥
+    3. 质量高
+    4. 支持多语言
+    """
+    
+    def __init__(self) -> None:
+        pass
+    
+    async def _synthesize(self, text: str, voice: str, output_file: str):
+        """异步合成语音"""
+        import edge_tts
+        
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(output_file)
+    
+    def call(self, save_file, transcript, voice="en-US-AriaNeural", sample_rate=16000):
+        """
+        同步调用接口
+        
+        常用语音：
+        - 英文女声: en-US-AriaNeural
+        - 英文男声: en-US-GuyNeural
+        - 中文女声: zh-CN-XiaoxiaoNeural
+        - 中文男声: zh-CN-YunxiNeural
+        """
+        # 运行异步函数
+        asyncio.run(self._synthesize(transcript, voice, str(save_file)))
+
+
+@register_tool("edge_tts")
+class EdgeTTSAgent:
+    """使用 Edge-TTS 的语音合成 Agent"""
+    
+    def __init__(self, cfg) -> None:
+        self.cfg = cfg
+    
+    def call(self, params: Dict):
+        pages: List = params["pages"]
+        save_path: str = params["save_path"]
+        generation_agent = EdgeTTSSynthesizer()
+        
+        for idx, page in enumerate(pages):
+            generation_agent.call(
+                save_file=save_path / f"p{idx + 1}.wav",
+                transcript=page,
+                voice=params.get("voice", "en-US-AriaNeural"),
+                sample_rate=self.cfg.get("sample_rate", 16000)
+            )
+        
         return {
             "modality": "speech"
         }

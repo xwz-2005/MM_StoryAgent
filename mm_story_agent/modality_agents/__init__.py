@@ -13,10 +13,12 @@ _import_structure = {
         'AudioLDM2Agent'
     ],
     'speech_agent': [
-        'CosyVoiceAgent'
+        'CosyVoiceAgent',
+        'EdgeTTSAgent'  # 免费Edge-TTS语音合成
     ],
     'image_agent': [
-        'StoryDiffusionAgent'
+        'StoryDiffusionAgent',
+        'DashScopeImageAgent'  # 任务2：新增API图像生成
     ],
     'llm': [
         'QwenAgent'

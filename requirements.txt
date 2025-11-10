@@ -12,4 +12,6 @@ opencv-python
 torch
 transformers
 diffusers
-git+https://github.com/aliyun/alibabacloud-nls-python-sdk@dev
+edge-tts
+# 阿里云语音SDK（可选，如果使用Edge-TTS可以不用）
+# git+https://github.com/aliyun/alibabacloud-nls-python-sdk@dev

@@ -1,4 +1,4 @@
-image_generation:
+mage_generation:
   cfg:
     height: 512
     id_length: 2
@@ -10,25 +10,6 @@ image_generation:
     seed: 112536
     style_name: Storybook
   tool: story_diffusion_t2i
-music_generation:
-  cfg:
-    device: cuda
-    llm_type: qwen
-    num_turns: 3
-  params:
-    duration: 30.0
-  tool: musicgen_t2m
-sound_generation:
-  cfg:
-    device: cuda
-    num_turns: 3
-    sample_rate: 16000
-  params:
-    ddim_steps: 200
-    guidance_scale: 3.5
-    n_candidate_per_text: 3
-    seed: 0
-  tool: audioldm2_t2a
 speech_generation:
   cfg:
     sample_rate: 16000

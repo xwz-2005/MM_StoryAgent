@@ -6,9 +6,23 @@ import soundfile as sf
 import torchaudio
 from transformers import AutoProcessor, MusicgenForConditionalGeneration
 
-from mm_story_agent.prompts_en import story_to_music_reviser_system, story_to_music_reviewer_system
+from mm_story_agent.prompts_zh import story_to_music_reviser_system, story_to_music_reviewer_system
 from mm_story_agent.base import register_tool, init_tool_instance
 
+"""
+这个文件实现了一个"从故事文本直接生成原创背景音乐"的系统，而不是从现有库中搜索下载。
+
+核心创新：生成 vs 检索
+--------------------------------
+    之前的Freesound系统（检索）：
+    # 从现有音效库中搜索下载
+    search_download_sound("happy piano music", "music.mp3")
+---------------------------------
+    这个MusicGen系统（生成）：
+    # 用AI模型从头创作音乐
+    music = AI模型生成("温馨的钢琴曲伴随轻快的节奏")
+---------------------------------
+"""
 
 class MusicGenSynthesizer:
 

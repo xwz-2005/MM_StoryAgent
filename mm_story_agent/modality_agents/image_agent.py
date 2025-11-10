@@ -2,16 +2,43 @@ from typing import List, Dict
 import json
 import os
 import random
+import time
+import base64
+import requests
+from io import BytesIO
+from PIL import Image
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from diffusers import StableDiffusionXLPipeline, DDIMScheduler
 
-from mm_story_agent.prompts_en import role_extract_system, role_review_system, \
+from mm_story_agent.prompts_zh import role_extract_system, role_review_system, \
     story_to_image_reviser_system, story_to_image_review_system
 from mm_story_agent.base import register_tool, init_tool_instance
 
+"""
+
+    StoryDiffusionAgent (本地版)  ← 继承相同逻辑 → DashScopeImageAgent (API版)
+            ↓                               ↓
+    StoryDiffusionSynthesizer         generate_image_from_prompt()
+            ↓
+    SpatialAttnProcessor2_0 (保持一致性)
+            ↓
+      AttnProcessor (基础注意力)
+      
+    ||---总结对比---||
+    
+    类名	                        类型	            主要作用	            使用场景
+   |-----------------------------------------------------------------------|
+    AttnProcessor	            基础组件	        标准注意力计算	        模型底层
+    SpatialAttnProcessor2_0	    核心算法	        保持多图一致性	        故事连续性
+    StoryDiffusionSynthesizer	生成引擎	        调用模型生成图片	    图像合成
+    StoryDiffusionAgent	        流程控制器	    本地完整流程	        有GPU的用户
+    DashScopeImageAgent	        流程控制器	    API完整流程	        无GPU的用户
+
+
+"""
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -20,7 +47,12 @@ def setup_seed(seed):
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
 
-
+"""
+    标准注意力计算（基础）
+    模型底层
+    处理文本和图像特征之间的交叉注意力
+    用于Stable Diffusion模型中的常规注意力计算
+"""
 class AttnProcessor(torch.nn.Module):
     r"""
     Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0).
@@ -133,6 +165,20 @@ def cal_attn_mask_xl(total_length,
     return mask1024, mask4096
 
 
+"""
+    空间注意力处理器:
+        作用：实现故事一致性的特殊注意力机制
+
+        核心创新：确保多张故事图片中角色和风格保持一致
+        
+        通过特殊的注意力掩码控制不同图片区域之间的信息流动
+        
+        包含两种调用模式：
+        
+        __call1__: 使用空间注意力掩码，保持角色一致性
+        
+        __call2__: 常规注意力，用于早期生成步骤
+"""
 class SpatialAttnProcessor2_0(torch.nn.Module):
     r"""
     Attention processor for IP-Adapater for PyTorch 2.0.
@@ -383,6 +429,23 @@ class SpatialAttnProcessor2_0(torch.nn.Module):
         return hidden_states
 
 
+"""
+    故事图像合成器: StoryDiffusionSynthesizer
+        作用：核心的图像生成引擎，负责调用AI模型生成故事图片
+        
+        加载和管理Stable Diffusion XL模型
+        
+        配置不同的艺术风格（动漫、迪士尼、照片风等）
+        
+        实现多图片一致性生成：
+        
+        先生成前4张"锚点图片"（id_images）
+        
+        基于锚点图片生成剩余图片，保持风格和角色一致
+        
+        使用空间注意力确保角色外貌、场景风格统一
+        
+"""
 class StoryDiffusionSynthesizer:
 
     def __init__(self,
@@ -573,6 +636,23 @@ class StoryDiffusionSynthesizer:
         return images
 
 
+"""
+    故事扩散代理：
+    
+        作用：完整的本地故事图像生成流程控制器
+        
+        从故事文本到最终图像的端到端处理
+        
+        包含两个核心子任务：
+        
+        extract_role_from_story: 提取故事角色信息
+        
+        generate_image_prompt_from_story: 生成图像描述
+        
+        调用StoryDiffusionSynthesizer实际生成图片
+        
+        使用本地Stable Diffusion模型
+"""
 @register_tool("story_diffusion_t2i")
 class StoryDiffusionAgent:
 
@@ -653,6 +733,253 @@ class StoryDiffusionAgent:
             pages: List,
             num_turns: int = 3
         ):
+        image_prompt_reviewer = init_tool_instance({
+            "tool": self.cfg.get("llm", "qwen"),
+            "cfg": {
+                "system_prompt": story_to_image_review_system,
+                "track_history": False
+            }
+        })
+        image_prompt_reviser = init_tool_instance({
+            "tool": self.cfg.get("llm", "qwen"),
+            "cfg": {
+                "system_prompt": story_to_image_reviser_system,
+                "track_history": False
+            }
+        })
+        image_prompts = []
+
+        for page in pages:
+            review = ""
+            image_prompt = ""
+            for turn in range(num_turns):
+                image_prompt, success = image_prompt_reviser.call(json.dumps({
+                    "all_pages": pages,
+                    "current_page": page,
+                    "previous_result": image_prompt,
+                    "improvement_suggestions": review,
+                }, ensure_ascii=False))
+                if image_prompt.startswith("Image description:"):
+                    image_prompt = image_prompt[len("Image description:"):]
+                review, success = image_prompt_reviewer.call(json.dumps({
+                    "all_pages": pages,
+                    "current_page": page,
+                    "image_description": image_prompt
+                }, ensure_ascii=False))
+                if review == "Check passed.":
+                    break
+            image_prompts.append(image_prompt)
+        return image_prompts
+
+
+# ==================== 任务2：基于API的图像生成Agent ====================
+
+@register_tool("dashscope_image_api")
+class DashScopeImageAgent:
+    """
+    使用通义万相API生成图像的Agent
+    优点：
+    1. 无需下载大模型
+    2. 速度快
+    3. 质量稳定
+    """
+    
+    def __init__(self, cfg) -> None:
+        self.cfg = cfg
+        self.api_key = os.environ.get('DASHSCOPE_API_KEY')
+        if not self.api_key:
+            raise ValueError("请设置环境变量 DASHSCOPE_API_KEY")
+    
+    def generate_image_from_prompt(self, prompt: str, style: str = "auto") -> Image.Image:
+        """
+        一句话 ———— 直接传入提示词调用API即可
+        （会返回一个可下载的链接，下载就完了，最后再转换格式、异常处理）
+
+        使用DashScope API生成单张图像
+        
+        Args:
+            prompt: 图像描述文本
+            style: 图像风格
+            
+        Returns:
+            PIL Image对象
+        """
+        import dashscope
+        from dashscope import ImageSynthesis
+        
+        # 调用通义万相API
+        try:
+            response = ImageSynthesis.call(
+                model='wanx-v1',  # 通义万相模型
+                prompt=prompt,
+                n=1,  # 生成1张图片
+                size='1024*1024',  # 图片尺寸
+                api_key=self.api_key
+            )
+            
+            if response.status_code == 200:
+                # 获取图片URL
+                image_url = response.output['results'][0]['url']
+                """
+                response = {
+                    'status_code': 200,
+                    'output': {
+                        'results': [
+                            {
+                                'url': 'https://example.com/generated_image.jpg'
+                            }
+                        ]
+                    }
+                }
+                """
+                
+                # 下载图片
+                img_response = requests.get(image_url, timeout=30)
+                img = Image.open(BytesIO(img_response.content))
+                # 转换格式
+                
+                print(f"✅ 图像生成成功: {prompt[:50]}...")
+                return img
+            else:
+                print(f"❌ API调用失败: {response.message}")
+                # 返回一个空白图像作为fallback
+                return Image.new('RGB', (1024, 1024), color='gray')
+                
+        except Exception as e:
+            print(f"❌ 图像生成出错: {e}")
+            # 返回一个空白图像作为fallback
+            return Image.new('RGB', (1024, 1024), color='gray')
+    
+    def call(self, params: Dict):
+        """
+        主调用方法
+        
+        Args:
+            params: 包含pages和save_path的字典
+            
+        Returns:
+            包含prompts和generation_results的字典
+        """
+        pages: List = params["pages"]
+        save_path = params["save_path"]
+        
+        # 1. 提取角色信息（复用原有逻辑）
+        print("🔍 正在提取故事中的角色...")
+        role_dict = self.extract_role_from_story(pages)
+        print(f"✅ 提取到 {len(role_dict)} 个角色: {list(role_dict.keys())}")
+        
+        # 2. 生成图像prompt（复用原有逻辑）
+        print("📝 正在生成图像描述...")
+        image_prompts = self.generate_image_prompt_from_story(pages)
+        
+        # 3. 替换角色描述
+        image_prompts_with_role_desc = []
+        for image_prompt in image_prompts:
+            for role, role_desc in role_dict.items():
+                if role in image_prompt:
+                    image_prompt = image_prompt.replace(role, role_desc)
+            image_prompts_with_role_desc.append(image_prompt)
+        """
+        role_dict = {
+            "小明": "一个戴着眼镜的胖胖小男孩，穿着蓝色校服",
+            "小红": "一个扎着马尾辫的瘦高女孩，穿着红色裙子"
+        }
+        
+        image_prompts = [
+            "小明在公园里踢足球",
+            "小红在旁边为小明加油"
+        ]
+        
+        替换：
+        image_prompt = "小明在公园里踢足球"
+        # 替换"小明" → "一个戴着眼镜的胖胖小男孩，穿着蓝色校服"
+        """
+
+        # 4. 使用API生成图像
+        print(f"🎨 开始生成 {len(image_prompts_with_role_desc)} 张图像...")
+        images = []
+        for idx, prompt in enumerate(image_prompts_with_role_desc):
+            print(f"生成第 {idx + 1}/{len(image_prompts_with_role_desc)} 张图像...")
+            
+            # 调用API生成图像
+            img = self.generate_image_from_prompt(prompt)
+            
+            # 调整图像尺寸（如果配置中指定了）
+            target_width = self.cfg.get("width", 1024)
+            target_height = self.cfg.get("height", 512)
+            if img.size != (target_width, target_height):
+                img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+            
+            images.append(img)
+            
+            # 保存图像
+            img.save(save_path / f"p{idx + 1}.png")
+            print(f"💾 已保存: {save_path / f'p{idx + 1}.png'}")
+            
+            # 避免API限流，稍微延时
+            if idx < len(image_prompts_with_role_desc) - 1:
+                time.sleep(1)
+        
+        print("✅ 所有图像生成完成！")
+        
+        return {
+            "prompts": image_prompts_with_role_desc,
+            "generation_results": images,
+        }
+    
+    # 复用原有的角色提取和prompt生成方法
+    """
+        角色提取函数
+        创建了两个助手：角色提取助手、角色检查助手
+        （利用base中的init_tool_instance，忘记了再复习）
+        然后循环调用,
+            角色检查给出建议（improvement_suggestions）
+            把建议给角色提取助手生成新的角色信息
+            检查助手给出  "Check passed." 跳出循环      
+    """
+    def extract_role_from_story(self, pages: List):
+        """提取故事中的角色（复用StoryDiffusionAgent的逻辑）"""
+        num_turns = self.cfg.get("num_turns", 3)
+        role_extractor = init_tool_instance({
+            "tool": self.cfg.get("llm", "qwen"),
+            "cfg": {
+                "system_prompt": role_extract_system,
+                "track_history": False
+            }
+        })
+        role_reviewer = init_tool_instance({
+            "tool": self.cfg.get("llm", "qwen"), # 从配置中获取LLM（大语言模型）的设置，如果没有找到，就使用默认值"qwen"。
+            "cfg": {
+                "system_prompt": role_review_system,
+                "track_history": False
+            }
+        })
+        roles = {}
+        review = ""
+        for turn in range(num_turns):  # dump相当于转为AI能看懂的json格式
+            roles, success = role_extractor.call(json.dumps({
+                    "story_content": pages,
+                    "previous_result": roles,
+                    "improvement_suggestions": review,
+                }, ensure_ascii=False
+            ))
+            # strip:移除开头与结尾的……
+            roles = json.loads(roles.strip("```json").strip("```"))
+            review, success = role_reviewer.call(json.dumps({
+                "story_content": pages,
+                "role_descriptions": roles
+            }, ensure_ascii=False))
+            if review == "Check passed.":
+                break
+        return roles
+
+
+    """
+        跟上一个函数 extract_role_from_story 一样一样的。。。
+        为故事书的每一页生成高质量的图像描述（prompt），通过"修订-检查"的循环机制确保描述准确且详细。
+    """
+    def generate_image_prompt_from_story(self, pages: List, num_turns: int = 3):
+        """从故事生成图像prompt（复用StoryDiffusionAgent的逻辑）"""
         image_prompt_reviewer = init_tool_instance({
             "tool": self.cfg.get("llm", "qwen"),
             "cfg": {

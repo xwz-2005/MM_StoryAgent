@@ -11,12 +11,20 @@ import numpy as np
 import soundfile as sf
 from tqdm import tqdm
 
-from ..prompts_en import fsd_search_reviser_system, fsd_search_reviewer_system, fsd_music_reviser_system, fsd_music_reviewer_system
+from ..prompts_zh import fsd_search_reviser_system, fsd_search_reviewer_system, fsd_music_reviser_system, fsd_music_reviewer_system
 from ..base import register_tool, init_tool_instance
 from ..utils.llm_output_check import parse_list
 
+"""
+    这个文件实现了一个智能音效系统：根据故事内容自动搜索、下载、混合合适的音效和背景音乐。
+
+
+"""
 
 def download_file(url, save_path):
+    """
+    通用的文件下载函数
+    """
     try:
         response = requests.get(url, stream=True)
         response.raise_for_status()
@@ -29,6 +37,18 @@ def download_file(url, save_path):
         print(f"Error during downloading: {e}")
 
 def search_download_sound(query, save_path, max_duration=10.0):
+    """
+
+    作用：从Freesound.org搜索并下载单个音效
+
+    工作流程：
+        搜索：在Freesound用关键词搜索音效
+        筛选：只找时长≤10秒的音效（适合音效）
+        获取详情：获取最佳匹配音效的详细信息
+        下载：下载高质量MP3预览文件
+
+    """
+
     url = f"https://freesound.org/apiv2/search/text/"
     params = {
         "query": urllib.parse.quote(query),
@@ -46,6 +66,17 @@ def search_download_sound(query, save_path, max_duration=10.0):
 
 
 def search_download_mix_query_list(query_list, save_path, sample_rate: int = 16000):
+    """
+
+    作用：搜索多个音效并混合成一个文件
+
+    工作流程：
+        逐个搜索下载：对每个查询词下载对应音效
+        统一处理：将所有音效转换为相同采样率和单声道
+        智能混合：将多个音效叠加混合
+        清理临时文件：删除中间文件，保留最终混合结果
+
+    """
     save_path = Path(save_path)
     tmp_path = save_path.parent / save_path.stem
     tmp_path.mkdir(exist_ok=True, parents=True)
@@ -70,6 +101,9 @@ def search_download_mix_query_list(query_list, save_path, sample_rate: int = 160
 
 @register_tool("freesound_sfx_retrieval")
 class FreesoundSfxAgent:
+    """
+    为故事每一页生成对应的场景音效
+    """
 
     def __init__(self, cfg) -> None:
         self.cfg = cfg
@@ -78,6 +112,12 @@ class FreesoundSfxAgent:
             self,
             pages: List,
         ):
+        """
+        生成音效搜索词
+        使用"修订-检查"循环为每一页故事生成音效描述
+        比如第一页："门吱呀声、脚步声、对话声"
+        第二页："雨声、雷声、风声"
+        """
         query_reviser = init_tool_instance({
             "tool": self.cfg.get("llm", "qwen"),
             "cfg": {
@@ -92,6 +132,7 @@ class FreesoundSfxAgent:
                 "track_history": False
             }
         })
+
         num_turns = self.cfg.get("num_turns", 3)
 
         query_lists = []
@@ -120,6 +161,12 @@ class FreesoundSfxAgent:
         return query_lists
 
     def call(self, params):
+        """
+        搜索下载混合音效：
+        为每一页搜索对应的多个音效
+        混合成该页的完整音效文件
+        保存为 p1.mp3, p2.mp3...
+        """
         queries = self.generate_search_query_from_story(params["pages"])
         save_path = params["save_path"]
         save_path = Path(save_path)
@@ -135,6 +182,9 @@ class FreesoundSfxAgent:
 
 @register_tool("freesound_music_retrieval")
 class FreesoundMusicAgent:
+    """
+    为整个故事生成统一的背景音乐
+    """
 
     def __init__(self, cfg) -> None:
         self.cfg = cfg
@@ -143,6 +193,9 @@ class FreesoundMusicAgent:
             self,
             pages: List,
         ):
+        """
+        生成音乐搜索词,分析整个故事的情绪和风格,生成适合的
+        """
         query_reviser = init_tool_instance({
             "tool": self.cfg.get("llm", "qwen"),
             "cfg": {
@@ -182,6 +235,11 @@ class FreesoundMusicAgent:
         return query
 
     def call(self, params):
+        """
+        1.搜索、下载
+        2.换格式
+        3.保存
+        """
         query = self.generate_search_query_from_story(params["pages"])
         save_path = params["save_path"]
         save_path = Path(save_path)
