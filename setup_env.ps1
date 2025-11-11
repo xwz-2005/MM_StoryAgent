@@ -14,7 +14,7 @@ Write-Host ""
 # ====================================
 Write-Host "Setting up DashScope API..." -ForegroundColor Yellow
 
-$env:DASHSCOPE_API_KEY = "sk-c5574beb924a4d9fbedd573f681090b0"
+$env:DASHSCOPE_API_KEY = ""
 
 Write-Host "  [OK] DASHSCOPE_API_KEY set" -ForegroundColor Green
 Write-Host ""

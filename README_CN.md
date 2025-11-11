@@ -18,8 +18,8 @@
 
 ```powershell
 # PowerShell中运行
-$env:DASHSCOPE_API_KEY="sk-c5574beb924a4d9fbedd573f681090b0"
-$env:ALIYUN_APP_KEY="AzX8QcMX3u1809OI"
+$env:DASHSCOPE_API_KEY=""
+$env:ALIYUN_APP_KEY=""
 
 # ⚠️ 重要：还需要补充以下两个变量（参考：如何获取阿里云AccessKey.md）
 $env:ALIYUN_ACCESS_KEY_ID="您的AccessKey ID"
