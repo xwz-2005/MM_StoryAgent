@@ -25,6 +25,7 @@ story_writer:
     max_conv_turns: 3
     num_outline: 1
     temperature: 0.5
+    long_text_threshold: 500
   params:
     main_role: 一个勇敢的小男孩
     scene: 神秘的大森林

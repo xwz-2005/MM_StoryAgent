@@ -26,6 +26,17 @@ def json_parse_outline(outline):
         return False
     return True
 
+LONG_TEXT_SUMMARIZER_SYSTEM = """
+你是一名专业的文本摘要分析师，需要从长文本中提取故事创作所需的关键信息。
+请分析输入的长文本，提炼出以下要素：
+1. 核心主题（故事的中心思想）
+2. 主要角色（名称及核心特征）
+3. 关键场景（时间和地点）
+4. 核心情节（起承转合的关键节点）
+5. 情感基调（整体氛围）
+
+输出格式为JSON对象，确保信息完整且简洁，便于后续故事创作使用。
+"""
 
 @register_tool("qa_outline_story_writer")
 class QAOutlineStoryWriter:
@@ -37,7 +48,49 @@ class QAOutlineStoryWriter:
         self.max_conv_turns = cfg.get("max_conv_turns", 3)
         self.num_outline = cfg.get("num_outline", 4)
         self.llm_type = cfg.get("llm", "qwen")
+        self.long_text_threshold = cfg.get("long_text_threshold", 500)
 
+    def _summarize_long_text(self, long_text: str) -> Dict:
+        """总结长文本并提取关键信息"""
+        print("📄 正在处理长文本...")
+        summarizer = init_tool_instance({
+            "tool": self.llm_type,
+            "cfg": {
+                "system_prompt": LONG_TEXT_SUMMARIZER_SYSTEM,
+                "track_history": False
+            }
+        })
+        
+        # 处理超长文本（分段处理）
+        chunks = self._split_long_text(long_text)
+        chunk_summaries = []
+        
+        for i, chunk in enumerate(chunks):
+            print(f"🔍 处理文本片段 {i+1}/{len(chunks)}")
+            summary, success = summarizer.call(
+                f"长文本片段 {i+1}：{chunk}\n请按照要求格式输出摘要JSON",
+                temperature=self.temperature
+            )
+            if success:
+                chunk_summaries.append(json.loads(summary))
+        
+        # 整合片段摘要
+        if len(chunk_summaries) > 1:
+            final_summary, success = summarizer.call(
+                f"请整合以下片段摘要，生成完整的长文本摘要：{json.dumps(chunk_summaries, ensure_ascii=False)}",
+                temperature=self.temperature
+            )
+            return json.loads(final_summary)
+        
+        return chunk_summaries[0] if chunk_summaries else {}
+
+    def _split_long_text(self, text: str, chunk_size: int = 2000) -> List[str]:
+        """将长文本分割为适合模型处理的片段"""
+        chunks = []
+        for i in range(0, len(text), chunk_size):
+            chunks.append(text[i:i+chunk_size])
+        return chunks
+    
     def _analyze_story_style(self, story_setting):
         """主题风格自动分析"""
         print("🔍 正在进行主题风格自动分析...")
@@ -106,6 +159,23 @@ class QAOutlineStoryWriter:
         #     ......
         # }
         
+        # 检查是否为长文本输入
+        if "long_text" in params and len(params["long_text"]) > self.long_text_threshold:
+            # 长文本处理流程：long_text → summarize → story setting
+            summary = self._summarize_long_text(params["long_text"])
+            
+            # 从摘要构建故事设置
+            story_setting = {
+                "story_topic": summary.get("核心主题", "基于长文本的故事"),
+                "main_role": summary.get("主要角色", "未明确角色"),
+                "scene": summary.get("关键场景", "未明确场景"),
+                "emotional_tone": summary.get("情感基调", ""),
+                "core_plot": summary.get("核心情节", "")
+            }
+            print("📝 长文本处理完成，生成故事设置")
+        else:
+            story_setting = params
+            
         # 添加主题风格自动分析
         dominant_style, style_rule = self._analyze_story_style(params)
         

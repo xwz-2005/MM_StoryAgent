@@ -32,7 +32,7 @@ MoviePy需要ImageMagick来渲染字幕文字
 
     ```python
     # 配置ImageMagick路径（用于字幕生成）
-    IMAGEMAGICK_BINARY = r"E:\444SoftWare\ImageMagic251008\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
+    IMAGEMAGICK_BINARY = r"D:\software\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
     os.environ['IMAGEMAGICK_BINARY'] = IMAGEMAGICK_BINARY
     ```
 

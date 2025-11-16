@@ -14,7 +14,7 @@ from zhon.hanzi import punctuation as zh_punc
 
 # 配置ImageMagick路径（用于字幕生成）
 #下面这个路径记得替换成自己的路径
-IMAGEMAGICK_BINARY = r"C:\Program Files\ImageMagick-7.1.2-Q16\magick.exe"
+IMAGEMAGICK_BINARY = r"D:\software\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
 os.environ['IMAGEMAGICK_BINARY'] = IMAGEMAGICK_BINARY
 
 from moviepy.editor import ImageClip, AudioFileClip, CompositeAudioClip, \
