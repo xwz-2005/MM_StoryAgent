@@ -15,8 +15,6 @@ if __name__ == "__main__":
     with open(args.config, "r", encoding='utf-8') as reader:
         config = yaml.load(reader, Loader=yaml.FullLoader)
     
-    mm_story_agent = MMStoryAgent()
-    mm_story_agent.call(config)
      # 初始化故事生成代理（已集成可视化工具）
     mm_story_agent = MMStoryAgent()
     # 启动主流程（包含新增的图表生成菜单）
