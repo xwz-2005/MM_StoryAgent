@@ -7,6 +7,7 @@ import base64
 import requests
 from io import BytesIO
 from PIL import Image
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -16,6 +17,7 @@ from diffusers import StableDiffusionXLPipeline, DDIMScheduler
 from mm_story_agent.prompts_zh import role_extract_system, role_review_system, \
     story_to_image_reviser_system, story_to_image_review_system
 from mm_story_agent.base import register_tool, init_tool_instance
+from mm_story_agent.utils.visualization import VisualizationTool
 
 """
 
@@ -1063,6 +1065,10 @@ class DashScopeImageAgent:
         generation_results = []
         generation_params = {}
         
+        # 初始化可视化工具
+        story_dir = Path(params["save_path"]).parent
+        viz_tool = VisualizationTool(output_dir=str(story_dir / "visualizations"))
+        
         # 逐个页面进行交互式处理
         for idx, (page, initial_prompt) in enumerate(zip(params["pages"], image_prompts)):
             print(f"\n{'='*60}")
@@ -1290,12 +1296,18 @@ class DashScopeImageAgent:
         # 4. 使用API生成图像
         print("\n🎨 开始生成图像...")
         save_path = params["save_path"]
+        # 确保 save_path 是 Path 对象
+        if not isinstance(save_path, Path):
+            save_path = Path(save_path)
         
         # 确保保存路径存在
-        os.makedirs(save_path, exist_ok=True)
+        save_path.mkdir(parents=True, exist_ok=True) 
         
         # 逐个生成图像，允许用户对每个图像进行交互
         for idx, prompt in enumerate(image_prompts_with_role_desc):
+            # 获取对应的页面内容（用于数据检测）
+            page_content = params["pages"][idx] if idx < len(params["pages"]) else ""
+            
             image_accepted = False
             image_retry_count = 0
             max_image_retries = 3
@@ -1326,10 +1338,43 @@ class DashScopeImageAgent:
                         print(f"📐 调整图像尺寸为 {target_width}x{target_height}")
                         img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
                     
-                    # 临时保存图像
+                    # 临时保存原始图像
                     temp_path = save_path / f"temp_p{idx + 1}.png"
                     img.save(temp_path)
                     print(f"   临时保存路径: {temp_path}")
+                    
+                    # ========== 新增：检测数据并生成图表 ==========
+                    # 检测故事中是否包含数据
+                    detected_data = viz_tool.detect_data_in_story(page_content)
+                    
+                    if detected_data:
+                        print(f"\n📊 第{idx+1}页检测到数据，生成可视化图表...")
+                        
+                        # 生成图表
+                        chart_path = viz_tool.generate_chart_from_story(
+                            page_content, 
+                            chart_type="auto",
+                            page_index=idx
+                        )
+                        
+                        if chart_path:
+                            try:
+                                # 将图表与图像结合
+                                combined_path = save_path / f"p{idx+1}_with_chart.png"
+                                viz_tool.combine_image_with_chart(
+                                    str(temp_path),  # 使用临时保存的图像路径
+                                    chart_path,
+                                    str(combined_path),
+                                    layout="bottom"  # 或 "side_by_side", "overlay"
+                                )
+                                
+                                # 使用组合后的图像替换原始图像
+                                img = Image.open(combined_path)
+                                temp_path = combined_path  # 更新临时路径
+                                print(f"✅ 图表已与图像组合，保存至: {combined_path}")
+                            except Exception as e:
+                                print(f"⚠️  组合图像和图表失败: {e}，使用原始图像")
+                    # ========== 数据可视化处理结束 ==========
                     
                     # 提供图像操作选项
                     print("\n🔧 请选择图像操作:")
@@ -1344,12 +1389,19 @@ class DashScopeImageAgent:
                     if image_choice == '1':
                         # 保存最终图像
                         final_path = save_path / f"p{idx + 1}.png"
-                        img.save(final_path)
+                        # 如果已经有组合图像，直接复制；否则保存原始图像
+                        if str(temp_path).endswith("_with_chart.png"):
+                            # 如果使用了组合图像，保存组合图像
+                            import shutil
+                            shutil.copy2(temp_path, final_path)
+                        else:
+                            img.save(final_path)
                         generation_results.append(img)
                         print(f"✅ 图像已接受并保存至: {final_path}")
                         # 删除临时文件
                         if temp_path.exists() and temp_path != final_path:
-                            os.remove(temp_path)
+                            if "temp_" in temp_path.name:
+                                os.remove(temp_path)
                         image_accepted = True
                         generation_stats["success_count"] += 1
                         

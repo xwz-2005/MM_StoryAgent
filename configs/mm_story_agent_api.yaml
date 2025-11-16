@@ -4,6 +4,13 @@ image_generation:
     llm: qwen
     num_turns: 3
     width: 1024
+    # 新增可视化配置
+    visualization:
+      enable_visualization: true
+      auto_detect: true
+      chart_types: ["bar", "line", "scatter"]
+      chart_layout: "bottom"  # bottom, side_by_side, overlay
+      generate_interactive: false
   params: {}
   tool: dashscope_image_api
 speech_generation:

@@ -14,7 +14,7 @@ from zhon.hanzi import punctuation as zh_punc
 
 # 配置ImageMagick路径（用于字幕生成）
 #下面这个路径记得替换成自己的路径
-IMAGEMAGICK_BINARY = r"E:\AppData\ImageMagick\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
+IMAGEMAGICK_BINARY = r"C:\Program Files\ImageMagick-7.1.2-Q16\magick.exe"
 os.environ['IMAGEMAGICK_BINARY'] = IMAGEMAGICK_BINARY
 
 from moviepy.editor import ImageClip, AudioFileClip, CompositeAudioClip, \
@@ -25,6 +25,7 @@ from moviepy.audio.fx.all import audio_loop
 from moviepy.video.tools.subtitles import SubtitlesClip
 
 from mm_story_agent.base import register_tool
+from mm_story_agent.utils.visualization import VisualizationTool
 
 
 def generate_srt(timestamps: List,
@@ -393,10 +394,53 @@ def compose_video(story_dir: Union[str, Path],
         # 改进图像文件路径处理，移除./前缀
         image_file = (image_dir / f"p{page}.png").absolute()
         
+        # ========== 新增：支持数据可视化图表 ==========
+        # 优先检查是否存在带图表的图像
+        chart_image_file = image_dir / f"p{page}_with_chart.png"
+        if chart_image_file.exists():
+            image_file = chart_image_file
+            print(f"📊 第{page}页：使用带图表的图像: {chart_image_file.name}")
+        else:
+            # 检查是否存在动态图表（GIF格式）
+            animated_chart_file = image_dir / f"p{page}_animated_chart.gif"
+            if animated_chart_file.exists():
+                image_file = animated_chart_file
+                print(f"📊 第{page}页：使用动态图表: {animated_chart_file.name}")
+            else:
+                # 检查是否存在单独的图表文件
+                chart_only_file = image_dir / f"p{page}_chart.png"
+                if chart_only_file.exists():
+                    # 如果存在原始图像，尝试组合；否则直接使用图表
+                    if image_file.exists():
+                        print(f"📊 第{page}页：检测到图表文件，将组合图像和图表")
+                        # 使用可视化工具组合图像和图表
+                        try:
+                            viz_tool = VisualizationTool(output_dir=str(image_dir))
+                            
+                            # 创建组合图像
+                            combined_path = image_dir / f"p{page}_combined.png"
+                            viz_tool.combine_image_with_chart(
+                                str(image_file),
+                                str(chart_only_file),
+                                str(combined_path),
+                                layout="bottom"  # 可以根据配置调整
+                            )
+                            image_file = combined_path
+                            print(f"✅ 第{page}页：图像和图表已组合")
+                        except Exception as e:
+                            print(f"⚠️  第{page}页：组合图像和图表失败: {e}，使用原始图像")
+                    else:
+                        # 如果没有原始图像，直接使用图表
+                        image_file = chart_only_file
+                        print(f"📊 第{page}页：使用图表文件作为图像")
+        # ========== 数据可视化支持结束 ==========
+        
         # 检查图像文件是否存在
         if not image_file.exists():
             # 尝试查找其他可能的图像格式或命名
             alternative_images = list(image_dir.glob(f"p{page}*.png"))
+            # 也检查GIF格式（用于动态图表）
+            alternative_images.extend(list(image_dir.glob(f"p{page}*.gif")))
             if alternative_images:
                 image_file = alternative_images[0]
                 print(f"🔄 找到替代图像文件: {image_file.name}")
@@ -419,28 +463,54 @@ def compose_video(story_dir: Union[str, Path],
                     image_file = image_dir / f"p{page}.png"  # 继续尝试原路径，让ImageClip抛出更明确的错误
         
         try:
-            image_clip = ImageClip(str(image_file))
+            # 检查文件类型，GIF需要特殊处理
+            if image_file.suffix.lower() == '.gif':
+                # 对于GIF文件，使用VideoFileClip而不是ImageClip
+                from moviepy.editor import VideoFileClip
+                image_clip = VideoFileClip(str(image_file))
+                # 调整GIF的时长以匹配语音时长
+                if image_clip.duration < speech_clip.duration:
+                    # 如果GIF时长较短，循环播放
+                    loops_needed = int(speech_clip.duration / image_clip.duration) + 1
+                    image_clip = concatenate_videoclips([image_clip] * loops_needed)
+                    image_clip = image_clip.subclip(0, speech_clip.duration)
+                elif image_clip.duration > speech_clip.duration:
+                    # 如果GIF时长较长，截取到语音时长
+                    image_clip = image_clip.subclip(0, speech_clip.duration)
+            else:
+                # 对于静态图像，使用原有的ImageClip逻辑
+                image_clip = ImageClip(str(image_file))
         except Exception as e:
             print(f"❌ 加载图像失败 {image_file}: {e}")
             # 如果图像加载失败，创建一个简单的占位视频
             from moviepy.video.VideoClip import ColorClip
-            image_clip = ColorClip(size=(width, height), color=(73, 109, 137), duration=speech_clip.duration)
+            # 需要从params获取width和height，这里使用默认值
+            default_width = 1024
+            default_height = 512
+            image_clip = ColorClip(size=(default_width, default_height), color=(73, 109, 137), duration=speech_clip.duration)
             print("📹 创建了占位视频片段")
+        
+        # 设置图像时长和帧率
         image_clip = image_clip.set_duration(speech_clip.duration).set_fps(fps)
-        image_clip = image_clip.crossfadein(fade_duration).crossfadeout(fade_duration)
+        
+        # 对于静态图像，添加淡入淡出效果（GIF已经有动画，不需要额外效果）
+        if image_file.suffix.lower() != '.gif':
+            image_clip = image_clip.crossfadein(fade_duration).crossfadeout(fade_duration)
 
-        if random.random() <= 0.5: # zoom in or zoom out
-            if random.random() <= 0.5:
-                zoom_mode = "in"
-            else:
-                zoom_mode = "out"
-            image_clip = add_zoom_effect(image_clip, zoom_speed, zoom_mode)
-        else: # move left or right
-            if random.random() <= 0.5:
-                direction = "left"
-            else:
-                direction = "right"
-            image_clip = add_move_effect(image_clip, direction=direction, move_raito=move_ratio)
+        # 添加缩放或移动效果（仅对静态图像，动态图表保持原样）
+        if image_file.suffix.lower() != '.gif':
+            if random.random() <= 0.5: # zoom in or zoom out
+                if random.random() <= 0.5:
+                    zoom_mode = "in"
+                else:
+                    zoom_mode = "out"
+                image_clip = add_zoom_effect(image_clip, zoom_speed, zoom_mode)
+            else: # move left or right
+                if random.random() <= 0.5:
+                    direction = "left"
+                else:
+                    direction = "right"
+                image_clip = add_move_effect(image_clip, direction=direction, move_raito=move_ratio)
 
         # 任务要求：去除音效模块，只使用语音
         # sound track - 已移除
