@@ -139,8 +139,26 @@ class EdgeTTSSynthesizer:
         - 中文女声: zh-CN-XiaoxiaoNeural
         - 中文男声: zh-CN-YunxiNeural
         """
-        # 运行异步函数
-        asyncio.run(self._synthesize(transcript, voice, str(save_file)))
+        # 安全地运行异步函数，避免事件循环关闭异常
+        try:
+            # 尝试获取当前事件循环
+            loop = asyncio.get_event_loop()
+            # 检查事件循环是否已关闭
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # 如果没有事件循环，创建一个新的
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        try:
+            # 在当前事件循环中运行异步任务
+            loop.run_until_complete(self._synthesize(transcript, voice, str(save_file)))
+        finally:
+            # 不要在子进程中关闭事件循环，让进程自然结束
+            # 这样可以避免与多进程环境中的事件循环管理冲突
+            pass
 
 
 @register_tool("edge_tts")

@@ -70,7 +70,12 @@ dlg_based_writer_prompt = """
 故事设定：{story_setting}
 对话历史：
 {dialogue_history}
-写一个包含{num_outline}个章节的故事大纲。
+
+主题风格分析结果：
+风格类型：{style_type}
+生成规则：{style_rule}
+
+请根据以上信息，写一个包含{num_outline}个章节的故事大纲，严格遵循生成规则。
 """.strip()
 
 

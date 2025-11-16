@@ -4,6 +4,7 @@ import random
 import re
 import os
 from datetime import timedelta
+import datetime
 
 from tqdm import trange
 import numpy as np
@@ -12,7 +13,8 @@ import cv2
 from zhon.hanzi import punctuation as zh_punc
 
 # 配置ImageMagick路径（用于字幕生成）
-IMAGEMAGICK_BINARY = r"E:\444SoftWare\ImageMagic251008\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
+#下面这个路径记得替换成自己的路径
+IMAGEMAGICK_BINARY = r"E:\AppData\ImageMagick\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
 os.environ['IMAGEMAGICK_BINARY'] = IMAGEMAGICK_BINARY
 
 from moviepy.editor import ImageClip, AudioFileClip, CompositeAudioClip, \
@@ -243,14 +245,51 @@ def compose_video(story_dir: Union[str, Path],
                   fade_duration: float = 1.0,
                   slide_duration: float = 0.4,
                   zoom_speed: float = 0.5,
-                  move_ratio: float = 0.95):
+                  move_ratio: float = 0.95,
+                  session_id: str = None):
     # 任务要求：已移除 sound_volume, music_volume, bg_speech_ratio, music_path 参数
     if not isinstance(story_dir, Path):
         story_dir = Path(story_dir)
 
     # sound_dir = story_dir / "sound"  # 任务要求：去除音效模块
-    image_dir = story_dir / "image"
-    speech_dir = story_dir / "speech"
+    # 智能检测文件目录结构，支持会话ID子目录
+    image_dir = None
+    speech_dir = None
+    
+    # 如果提供了会话ID，优先使用指定的会话目录
+    if session_id:
+        print(f"🎯 使用指定的会话目录: {session_id}")
+        session_dir = story_dir / session_id
+        
+        if session_dir.exists() and session_dir.is_dir():
+            if (session_dir / "image").exists():
+                image_dir = session_dir / "image"
+            if (session_dir / "speech").exists():
+                speech_dir = session_dir / "speech"
+    # 如果没有指定会话ID或指定的会话目录不存在，回退到自动检测
+    elif session_id is None:
+        # 检查是否存在会话ID子目录（如类似20251115_171253的格式）
+        import re
+        session_dirs = [d for d in story_dir.iterdir() if d.is_dir() and re.match(r'\d{8}_\d{6}', d.name)]
+        
+        if session_dirs:
+            # 如果找到多个会话目录，使用最新的一个
+            latest_session = sorted(session_dirs)[-1]
+            print(f"🔍 检测到会话目录: {latest_session.name}")
+            
+            if (latest_session / "image").exists():
+                image_dir = latest_session / "image"
+            if (latest_session / "speech").exists():
+                speech_dir = latest_session / "speech"
+    
+    # 如果没有找到会话子目录或子目录中没有所需文件，回退到直接在story_dir下查找
+    if image_dir is None:
+        image_dir = story_dir / "image"
+    if speech_dir is None:
+        speech_dir = story_dir / "speech"
+    
+    print(f"📁 使用图像目录: {image_dir}")
+    print(f"🔊 使用语音目录: {speech_dir}")
 
     video_clips = []
     # audio_durations = []
@@ -264,15 +303,34 @@ def compose_video(story_dir: Union[str, Path],
 
         if (speech_dir / f"p{page}.wav").exists(): # single speech file
             single_utterance = True
-            speech_file = (speech_dir / f"./p{page}.wav").__str__()
+            speech_file = str(speech_dir / f"p{page}.wav")  # 直接使用字符串路径，去掉./前缀
             speech_clip = AudioFileClip(speech_file, fps=audio_sample_rate)
-            # speech_clip = speech_clip.audio_fadein(fade_duration)
-            
             speech_clip = concatenate_audioclips([fade_silence, speech_clip, fade_silence])
+            has_speech = True
+        elif not (speech_dir / f"p{page}.wav").exists() and not list(speech_dir.glob(f"p{page}_*.wav")):
+            # 既没有单文件也没有多文件的情况
+            print(f"⚠️  第{page}页未找到语音文件，创建5秒静默音频")
+            single_utterance = True
+            # 创建静默音频作为替代
+            speech_clip = AudioArrayClip(np.zeros((int(audio_sample_rate * 5), 2)), fps=audio_sample_rate)
+            speech_clip = concatenate_audioclips([fade_silence, speech_clip, fade_silence])
+            # 设置默认能量值，避免后续计算错误
+            speech_rms = 0.01  # 一个很小的默认值
+            has_speech = False
         else: # multiple speech files
             single_utterance = False
             speech_files = list(speech_dir.glob(f"p{page}_*.wav"))
             speech_files = sorted(speech_files, key=lambda x: int(x.stem.split("_")[-1]))
+            
+            # 检查是否找到语音文件
+            if not speech_files:
+                print(f"⚠️  第{page}页未找到语音文件，创建5秒静默音频")
+                speech_clip = AudioArrayClip(np.zeros((int(audio_sample_rate * 5), 2)), fps=audio_sample_rate)
+                speech_clip = concatenate_audioclips([fade_silence, speech_clip, fade_silence])
+                speech_rms = 0.01  # 一个很小的默认值
+                has_speech = False
+            else:
+                has_speech = True
             speech_clips = []
             for utt_idx, speech_file in enumerate(speech_files):
                 speech_clip = AudioFileClip(speech_file.__str__(), fps=audio_sample_rate)
@@ -314,12 +372,60 @@ def compose_video(story_dir: Union[str, Path],
                                    cur_duration + speech_clip.duration - fade_duration - slide_duration])
                 cur_duration += speech_clip.duration - slide_duration
 
-        speech_array, _ = librosa.core.load(speech_file, sr=None)
-        speech_rms = librosa.feature.rms(y=speech_array)[0].mean()
+        # 安全地计算语音能量，避免索引错误
+        if 'has_speech' in locals() and has_speech and ('speech_rms' not in locals() or speech_rms is None):
+            try:
+                # 确保speech_file是有效的
+                if 'speech_files' in locals() and isinstance(speech_files, list) and speech_files:
+                    speech_file = speech_files[0]  # 使用第一个语音文件进行能量计算
+                
+                if 'speech_file' in locals() and speech_file and isinstance(speech_file, (str, Path)) and Path(speech_file).exists():
+                    speech_array, _ = librosa.core.load(str(speech_file), sr=None)
+                    speech_rms = librosa.feature.rms(y=speech_array)[0].mean()
+                    print(f"🔊 第{page}页语音能量: {speech_rms:.6f}")
+                else:
+                    speech_rms = 0.01  # 默认能量值
+            except Exception as e:
+                print(f"⚠️  计算语音能量时出错: {e}")
+                speech_rms = 0.01  # 出错时使用默认值
 
         # set image as the main content, align the duration
-        image_file = (image_dir / f"./p{page}.png").__str__()        
-        image_clip = ImageClip(image_file)
+        # 改进图像文件路径处理，移除./前缀
+        image_file = (image_dir / f"p{page}.png").absolute()
+        
+        # 检查图像文件是否存在
+        if not image_file.exists():
+            # 尝试查找其他可能的图像格式或命名
+            alternative_images = list(image_dir.glob(f"p{page}*.png"))
+            if alternative_images:
+                image_file = alternative_images[0]
+                print(f"🔄 找到替代图像文件: {image_file.name}")
+            else:
+                # 如果找不到图像文件，创建一个临时的占位图像
+                print(f"⚠️  第{page}页未找到图像文件，创建占位图像")
+                # 创建一个简单的占位图像
+                placeholder_path = image_dir / f"p{page}_placeholder.png"
+                from PIL import Image, ImageDraw, ImageFont
+                try:
+                    # 创建一个带文字的占位图像
+                    img = Image.new('RGB', (800, 600), color=(73, 109, 137))
+                    d = ImageDraw.Draw(img)
+                    d.text((400, 300), f"Page {page}", fill=(255, 255, 255), anchor='mm')
+                    img.save(placeholder_path)
+                    image_file = placeholder_path
+                except Exception as e:
+                    print(f"❌ 创建占位图像失败: {e}")
+                    # 如果创建占位图像也失败，使用默认的空白图像
+                    image_file = image_dir / f"p{page}.png"  # 继续尝试原路径，让ImageClip抛出更明确的错误
+        
+        try:
+            image_clip = ImageClip(str(image_file))
+        except Exception as e:
+            print(f"❌ 加载图像失败 {image_file}: {e}")
+            # 如果图像加载失败，创建一个简单的占位视频
+            from moviepy.video.VideoClip import ColorClip
+            image_clip = ColorClip(size=(width, height), color=(73, 109, 137), duration=speech_clip.duration)
+            print("📹 创建了占位视频片段")
         image_clip = image_clip.set_duration(speech_clip.duration).set_fps(fps)
         image_clip = image_clip.crossfadein(fade_duration).crossfadeout(fade_duration)
 
@@ -378,24 +484,71 @@ class SlideshowVideoComposeAgent:
     def adjust_caption_config(self, width, height):
         area_height = int(height * 0.06)
         fontsize = int((width + height) / 2 * 0.025)
+        max_length = int(width / (fontsize * 0.6))  # 根据宽度和字体大小动态调整字幕最大长度
         return {
             "fontsize": fontsize,
-            "area_height": area_height
+            "area_height": area_height,
+            "max_length": max_length
         }
 
     def call(self, params):
-        height = params["height"]
-        width = params["width"]
-        pages = params["pages"]
-        params["caption"].update(self.adjust_caption_config(width, height))
-        compose_video(
-            story_dir=Path(params["story_dir"]),
-            save_path=Path(params["story_dir"]) / "output.mp4",
-            captions=pages,
-            num_pages=len(pages),
-            fps=params["fps"],
-            audio_sample_rate=params["audio_sample_rate"],
-            audio_codec=params["audio_codec"],
-            caption_config=params["caption"],
-            **params["slideshow_effect"]
-        )
+        try:
+            height = params["height"]
+            width = params["width"]
+            pages = params["pages"]
+            story_dir = Path(params["story_dir"])
+            
+            # 检查参数完整性
+            required_params = ["height", "width", "pages", "story_dir", "fps", "audio_sample_rate", 
+                             "audio_codec", "caption", "slideshow_effect"]
+            for param in required_params:
+                if param not in params:
+                    raise ValueError(f"缺少必要参数: {param}")
+            
+            # 检查story_dir是否存在
+            if not story_dir.exists():
+                raise FileNotFoundError(f"故事目录不存在: {story_dir}")
+            
+            # 更新字幕配置，添加最大长度设置
+            caption_config = self.adjust_caption_config(width, height)
+            caption_config.update(params["caption"])
+            params["caption"] = caption_config
+            
+            # 优先使用传入的output_path参数，如果没有则使用默认命名方式
+            if "output_path" in params and params["output_path"]:
+                save_path = Path(params["output_path"])
+            else:
+                # 生成带有时间戳的视频文件名，避免覆盖现有文件
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                video_filename = f"story_video_{timestamp}.mp4"
+                save_path = story_dir / video_filename
+            
+            print(f"📽️  开始合成视频，将保存至: {save_path}")
+            print(f"📐 视频尺寸: {width}x{height}, FPS: {params['fps']}")
+            print(f"📄 页数: {len(pages)}")
+            
+            # 调用合成函数
+            # 从params中获取session_id参数（如果存在）
+            session_id = params.get("session_id")
+            
+            compose_video(
+                story_dir=story_dir,
+                save_path=save_path,
+                captions=pages,
+                num_pages=len(pages),
+                fps=params["fps"],
+                audio_sample_rate=params["audio_sample_rate"],
+                audio_codec=params["audio_codec"],
+                caption_config=params["caption"],
+                **params["slideshow_effect"],
+                session_id=session_id  # 传递会话ID参数
+            )
+            
+            print(f"✅ 视频合成完成，已保存至: {save_path}")
+            return {"video_path": str(save_path)}
+        except Exception as e:
+            print(f"❌ 视频合成失败: {str(e)}")
+            # 提供详细的错误信息
+            import traceback
+            print(f"详细错误信息:\n{traceback.format_exc()}")
+            return {"error": str(e), "video_path": None}

@@ -850,9 +850,148 @@ class DashScopeImageAgent:
             # 返回一个空白图像作为fallback
             return Image.new('RGB', (1024, 1024), color='gray')
     
+    def _get_user_choice(self, prompt="请选择操作: ", valid_options=['1', '2', '3'], max_attempts=5):
+        """获取并验证用户选择，支持自定义选项和最大尝试次数"""
+        attempts = 0
+        while attempts < max_attempts:
+            try:
+                # 显示提示
+                print(prompt)
+                
+                # 获取用户输入
+                choice = input().strip().lower()
+                
+                # 支持帮助命令
+                if choice in ['help', '帮助', '?']:
+                    self._show_help()
+                    continue
+                    
+                if choice in valid_options:
+                    return choice
+                else:
+                    print(f"❌ 请输入正确选项 ({'/'.join(valid_options)})")
+                    attempts += 1
+                    if attempts >= max_attempts:
+                        print(f"⚠️  多次输入错误，将使用默认选项: {valid_options[0]}")
+                        return valid_options[0]
+            except EOFError:
+                # 处理EOF错误（非交互式环境）
+                print("\n⚠️ 在非交互式环境中运行，使用默认选项")
+                return valid_options[0]
+            except KeyboardInterrupt:
+                print("\n👋 用户中断操作，再见!")
+                exit()
+            except Exception as e:
+                print(f"❌ 输入错误: {str(e)}，请重试")
+                attempts += 1
+        return valid_options[0]  # 默认返回第一个选项
+    
+    def _show_help(self):
+        """显示帮助信息"""
+        print("\n📚 图像生成系统帮助:")
+        print("   • 在任何输入提示时，输入 'help'、'帮助' 或 '?' 可显示此帮助")
+        print("   • 提示词优化技巧:")
+        print("     - 详细描述角色特征、场景环境、光线效果和风格要求")
+        print("     - 明确指定图像比例和构图要求")
+        print("     - 添加情感和氛围描述以增强表现力")
+        print("   • 图像生成注意事项:")
+        print("     - 保持角色描述一致性，确保故事连续性")
+        print("     - 复杂场景可尝试分步骤优化提示词")
+        print("     - 遇到生成问题时，可尝试简化或调整提示词")
+        print("   • 操作提示:")
+        print("     - 输入 '1' 通常表示确认/保留当前选项")
+        print("     - 输入 '2' 通常表示重新生成/修改选项")
+        print("     - 连续多次重新生成会触发参数调整建议")
+        print("   • 提示词历史记录会保存在prompt_history.json文件中")
+        print("   • 如遇严重问题，可按Ctrl+C中断程序")
+        print()
+    
+    def _adjust_generation_params(self):
+        """调整生成参数"""
+        print("\n⚙️  图像生成参数调整")
+        print("1. 增加提示词详细度")
+        print("2. 调整图像风格")
+        print("3. 修改图像比例")
+        print("4. 返回")
+        
+        choice = self._get_user_choice(valid_options=['1', '2', '3', '4'])
+        
+        if choice == '1':
+            print("🔍 已设置为增加提示词详细度")
+            return {"detail_level": "high"}
+        elif choice == '2':
+            print("\n🎨 请选择图像风格:")
+            print("1. 写实风格")
+            print("2. 卡通风格")
+            print("3. 油画风格")
+            print("4. 水彩风格")
+            print("5. 赛博朋克风格")
+            print("6. 奇幻风格")
+            
+            style_choice = self._get_user_choice(valid_options=['1', '2', '3', '4', '5', '6'])
+            styles = {
+                '1': '写实风格',
+                '2': '卡通风格',
+                '3': '油画风格',
+                '4': '水彩风格',
+                '5': '赛博朋克风格',
+                '6': '奇幻风格'
+            }
+            selected_style = styles.get(style_choice, '写实风格')
+            print(f"✅ 已选择风格: {selected_style}")
+            return {"style": selected_style}
+        elif choice == '3':
+            print("\n📐 请选择图像比例:")
+            print("1. 16:9 (宽屏)")
+            print("2. 4:3 (标准)")
+            print("3. 1:1 (方形)")
+            print("4. 9:16 (竖屏)")
+            
+            ratio_choice = self._get_user_choice(valid_options=['1', '2', '3', '4'])
+            ratios = {
+                '1': {'width': 1024, 'height': 576},
+                '2': {'width': 1024, 'height': 768},
+                '3': {'width': 1024, 'height': 1024},
+                '4': {'width': 576, 'height': 1024}
+            }
+            selected_ratio = ratios.get(ratio_choice, {'width': 1024, 'height': 512})
+            print(f"✅ 已选择比例: {selected_ratio['width']}x{selected_ratio['height']}")
+            return selected_ratio
+        
+        return None
+    
+    def _get_modification_input(self, current_prompt):
+        """获取用户修改输入并提供指导"""
+        print("\n✏️  提示词修改器")
+        print("💡 修改建议:")
+        print("   • 增加角色外观细节: '主角穿着蓝色外套，有棕色头发'")
+        print("   • 调整场景环境: '在阳光明媚的公园里，有樱花树'")
+        print("   • 指定光线效果: '温暖的午后阳光，柔和的阴影'")
+        print("   • 添加情感氛围: '欢快的氛围，充满希望的场景'")
+        print("   • 输入 'cancel' 取消修改")
+        print("   • 输入 'help' 获取更多帮助")
+        
+        while True:
+            print("\n当前提示词:")
+            print(f"   {current_prompt[:100]}..." if len(current_prompt) > 100 else f"   {current_prompt}")
+            
+            new_prompt = input("\n请输入修改后的提示词: ").strip()
+            
+            if new_prompt.lower() == 'help':
+                self._show_help()
+                continue
+            elif new_prompt.lower() == 'cancel':
+                return None
+            elif not new_prompt:
+                print("⚠️  提示词不能为空，请重新输入")
+            elif len(new_prompt) < 10:
+                print("⚠️  提示词过于简短，请提供更详细的描述")
+            else:
+                return new_prompt
+    
     def call(self, params: Dict):
         """
-        主调用方法
+        主调用方法 - 增强版交互式提示词编辑和图像重生成功能
         
         Args:
             params: 包含pages和save_path的字典
@@ -860,71 +999,475 @@ class DashScopeImageAgent:
         Returns:
             包含prompts和generation_results的字典
         """
-        pages: List = params["pages"]
-        save_path = params["save_path"]
+        print(f"\n{'✨'*40}")
+        print(f"🖼️  启动交互式图像生成与优化系统")
+        print(f"{'✨'*40}")
         
-        # 1. 提取角色信息（复用原有逻辑）
-        print("🔍 正在提取故事中的角色...")
-        role_dict = self.extract_role_from_story(pages)
-        print(f"✅ 提取到 {len(role_dict)} 个角色: {list(role_dict.keys())}")
+        # 显示系统欢迎信息
+        print("\n👋 欢迎使用交互式图像生成系统!")
+        print("📝 系统将帮助您为故事生成高质量图像")
+        print("💡 提示: 输入 'help' 在任何时候获取帮助")
+        print(f"{'='*40}")
         
-        # 2. 生成图像prompt（复用原有逻辑）
-        print("📝 正在生成图像描述...")
-        image_prompts = self.generate_image_prompt_from_story(pages)
-        
-        # 3. 替换角色描述
-        image_prompts_with_role_desc = []
-        for image_prompt in image_prompts:
-            for role, role_desc in role_dict.items():
-                if role in image_prompt:
-                    image_prompt = image_prompt.replace(role, role_desc)
-            image_prompts_with_role_desc.append(image_prompt)
-        """
-        role_dict = {
-            "小明": "一个戴着眼镜的胖胖小男孩，穿着蓝色校服",
-            "小红": "一个扎着马尾辫的瘦高女孩，穿着红色裙子"
+        # 初始化提示词历史记录
+        prompt_history = []
+        generation_stats = {
+            "total_pages": len(params["pages"]),
+            "success_count": 0,
+            "error_count": 0,
+            "optimization_rounds": 0
         }
         
-        image_prompts = [
-            "小明在公园里踢足球",
-            "小红在旁边为小明加油"
-        ]
+        # 1. 提取角色信息（复用原有逻辑）
+        print("\n🔍 正在提取故事中的角色信息...")
+        try:
+            start_time = time.time()
+            role_dict = self.extract_role_from_story(params["pages"])
+            end_time = time.time()
+            
+            print(f"✅ 角色提取完成 (耗时: {end_time - start_time:.2f} 秒)")
+            print(f"   共提取到 {len(role_dict)} 个角色")
+            
+            # 显示角色详情
+            if role_dict:
+                print("\n👥 角色详情:")
+                for role, details in role_dict.items():
+                    # 检查details的类型，确保安全访问
+                    if isinstance(details, dict):
+                        description = details.get('description', '无描述')
+                    elif isinstance(details, str):
+                        # 如果details是字符串，直接使用它作为描述
+                        description = details
+                    else:
+                        description = '无描述'
+                    print(f"   • {role}: {description[:100]}..." if len(description) > 100 else f"   • {role}: {description}")
+        except Exception as e:
+            print(f"❌ 角色提取失败: {str(e)}")
+            print("⚠️  将继续使用默认角色处理")
+            role_dict = {}
         
-        替换：
-        image_prompt = "小明在公园里踢足球"
-        # 替换"小明" → "一个戴着眼镜的胖胖小男孩，穿着蓝色校服"
-        """
-
+        # 2. 生成图像prompt（复用原有逻辑）
+        print("\n📝 正在为故事生成图像描述...")
+        try:
+            start_time = time.time()
+            image_prompts = self.generate_image_prompt_from_story(params["pages"])
+            end_time = time.time()
+            print(f"✅ 提示词生成完成 (耗时: {end_time - start_time:.2f} 秒)")
+        except Exception as e:
+            print(f"❌ 提示词生成失败: {str(e)}")
+            print("❌ 系统无法继续，请检查配置和网络连接")
+            return {"error": "Prompt generation failed"}
+        
+        # 存储处理后的提示词和图像
+        image_prompts_with_role_desc = []
+        generation_results = []
+        generation_params = {}
+        
+        # 逐个页面进行交互式处理
+        for idx, (page, initial_prompt) in enumerate(zip(params["pages"], image_prompts)):
+            print(f"\n{'='*60}")
+            print(f"🖼️  处理第 {idx + 1}/{len(params['pages'])} 张图像")
+            print(f"{'='*60}")
+            
+            # 显示当前页面内容摘要
+            page_summary = page[:100] + "..." if len(page) > 100 else page
+            print(f"\n📄 页面内容: {page_summary}")
+            
+            prompt_finalized = False
+            retry_count = 0
+            max_retries = 3
+            current_prompt = initial_prompt
+            
+            while not prompt_finalized and retry_count < max_retries:
+                # 3. 将角色描述替换为更详细的描述
+                enhanced_prompt = current_prompt
+                for role, role_desc in role_dict.items():
+                    if role in current_prompt:
+                        enhanced_prompt = enhanced_prompt.replace(role, role_desc)
+                
+                # 根据生成参数调整提示词
+                if generation_params:
+                    if generation_params.get("style"):
+                        enhanced_prompt = f"{enhanced_prompt}, {generation_params['style']}"
+                    if generation_params.get("detail_level") == "high":
+                        enhanced_prompt = f"{enhanced_prompt}, 高细节，清晰，精确描述"
+                
+                # 显示提示词
+                print(f"\n💬 生成的提示词:")
+                if len(enhanced_prompt) > 150:
+                    print(f"   {enhanced_prompt[:150]}...")
+                    print(f"   [提示词过长，总长度: {len(enhanced_prompt)} 字符]")
+                else:
+                    print(f"   {enhanced_prompt}")
+                
+                # 提供提示词操作选项
+                print("\n🔧 请选择提示词操作:")
+                print("1. 保留当前提示词")
+                print("2. 修改提示词")
+                print("3. 重新生成提示词")
+                print("4. 调整生成参数")
+                print("5. 查看帮助")
+                
+                choice = self._get_user_choice(valid_options=['1', '2', '3', '4', '5'])
+                
+                if choice == '1':
+                    # 保留当前提示词
+                    print("✅ 提示词已确认")
+                    image_prompts_with_role_desc.append(enhanced_prompt)
+                    prompt_history.append({
+                        "page_index": idx,
+                        "action": "保留提示词",
+                        "prompt": enhanced_prompt,
+                        "params": generation_params.copy(),
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    prompt_finalized = True
+                    generation_stats["success_count"] += 1
+                    
+                elif choice == '2':
+                    # 修改提示词
+                    new_prompt = self._get_modification_input(enhanced_prompt)
+                    
+                    if new_prompt:
+                        # 对修改后的提示词也进行角色增强
+                        enhanced_new_prompt = new_prompt
+                        for role, role_desc in role_dict.items():
+                            if role in new_prompt:
+                                enhanced_new_prompt = enhanced_new_prompt.replace(role, role_desc)
+                        
+                        # 根据当前参数调整
+                        if generation_params:
+                            if generation_params.get("style"):
+                                enhanced_new_prompt = f"{enhanced_new_prompt}, {generation_params['style']}"
+                            if generation_params.get("detail_level") == "high":
+                                enhanced_new_prompt = f"{enhanced_new_prompt}, 高细节，清晰，精确描述"
+                        
+                        print(f"\n✅ 修改后的提示词:")
+                        print(f"   {enhanced_new_prompt[:150]}..." if len(enhanced_new_prompt) > 150 else f"   {enhanced_new_prompt}")
+                        
+                        # 确认修改
+                        print("\n🔧 确认修改:")
+                        print("1. 确认使用修改后的提示词")
+                        print("2. 重新修改")
+                        print("3. 放弃修改，使用原始提示词")
+                        
+                        confirm_choice = self._get_user_choice(valid_options=['1', '2', '3'])
+                        
+                        if confirm_choice == '1':
+                            image_prompts_with_role_desc.append(enhanced_new_prompt)
+                            prompt_history.append({
+                                "page_index": idx,
+                                "action": "修改提示词",
+                                "original_prompt": enhanced_prompt,
+                                "modified_prompt": enhanced_new_prompt,
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                            prompt_finalized = True
+                            generation_stats["optimization_rounds"] += 1
+                            generation_stats["success_count"] += 1
+                        elif confirm_choice == '2':
+                            # 重新修改提示词
+                            retry_modification = True
+                            while retry_modification:
+                                # 重新获取用户修改的提示词
+                                retry_new_prompt = self._get_modification_input(enhanced_prompt)
+                                if retry_new_prompt:
+                                    # 对重新修改后的提示词进行角色增强
+                                    enhanced_retry_new_prompt = retry_new_prompt
+                                    for role, role_desc in role_dict.items():
+                                        if role in retry_new_prompt:
+                                            enhanced_retry_new_prompt = enhanced_retry_new_prompt.replace(role, role_desc)
+                                    
+                                    # 根据当前参数调整
+                                    if generation_params:
+                                        if generation_params.get("style"):
+                                            enhanced_retry_new_prompt = f"{enhanced_retry_new_prompt}, {generation_params['style']}"
+                                        if generation_params.get("detail_level") == "high":
+                                            enhanced_retry_new_prompt = f"{enhanced_retry_new_prompt}, 高细节，清晰，精确描述"
+                                    
+                                    print(f"\n✅ 修改后的提示词:")
+                                    print(f"   {enhanced_retry_new_prompt[:150]}..." if len(enhanced_retry_new_prompt) > 150 else f"   {enhanced_retry_new_prompt}")
+                                    
+                                    # 再次确认修改
+                                    print("\n🔧 确认修改:")
+                                    print("1. 确认使用修改后的提示词")
+                                    print("2. 重新修改")
+                                    print("3. 放弃修改，使用原始提示词")
+                                    
+                                    retry_confirm_choice = self._get_user_choice(valid_options=['1', '2', '3'])
+                                    
+                                    if retry_confirm_choice == '1':
+                                        image_prompts_with_role_desc.append(enhanced_retry_new_prompt)
+                                        prompt_history.append({
+                                            "page_index": idx,
+                                            "action": "修改提示词",
+                                            "original_prompt": enhanced_prompt,
+                                            "modified_prompt": enhanced_retry_new_prompt,
+                                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                                        })
+                                        prompt_finalized = True
+                                        generation_stats["optimization_rounds"] += 1
+                                        generation_stats["success_count"] += 1
+                                        retry_modification = False
+                                    elif retry_confirm_choice == '3':
+                                        image_prompts_with_role_desc.append(enhanced_prompt)
+                                        prompt_history.append({
+                                            "page_index": idx,
+                                            "action": "放弃修改，保留提示词",
+                                            "prompt": enhanced_prompt,
+                                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                                        })
+                                        prompt_finalized = True
+                                        generation_stats["success_count"] += 1
+                                        retry_modification = False
+                                    # 选择2将继续循环
+                                else:
+                                    # 如果用户取消修改
+                                    retry_modification = False
+                        elif confirm_choice == '3':
+                            image_prompts_with_role_desc.append(enhanced_prompt)
+                            prompt_history.append({
+                                "page_index": idx,
+                                "action": "放弃修改，保留提示词",
+                                "prompt": enhanced_prompt,
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                            prompt_finalized = True
+                            generation_stats["success_count"] += 1
+                    
+                elif choice == '3':
+                    # 重新生成提示词
+                    retry_count += 1
+                    print(f"🔄 正在重新生成提示词... (重试 {retry_count}/{max_retries})")
+                    generation_stats["optimization_rounds"] += 1
+                    
+                    try:
+                        # 为特定页面重新生成提示词
+                        new_prompt_list = self.generate_image_prompt_from_story([page])
+                        if new_prompt_list:
+                            current_prompt = new_prompt_list[0]
+                            print("✅ 新提示词已生成")
+                        else:
+                            print("⚠️  无法生成新提示词，使用原提示词")
+                    except Exception as e:
+                        print(f"❌ 提示词生成失败: {str(e)}")
+                    
+                    # 连续重新生成时，询问是否调整参数
+                    if retry_count >= 2:
+                        print("\n⚠️  您已连续多次选择重新生成提示词")
+                        print("🔧 是否调整生成参数？")
+                        print("1. 是")
+                        print("2. 否")
+                        
+                        param_choice = self._get_user_choice(valid_options=['1', '2'])
+                        if param_choice == '1':
+                            new_params = self._adjust_generation_params()
+                            if new_params:
+                                generation_params.update(new_params)
+                
+                elif choice == '4':
+                    # 调整生成参数
+                    new_params = self._adjust_generation_params()
+                    if new_params:
+                        generation_params.update(new_params)
+                
+                elif choice == '5':
+                    # 显示帮助
+                    self._show_help()
+            
+            if retry_count >= max_retries:
+                # 达到最大重试次数，使用最后生成的提示词
+                print("⚠️  已达到最大重试次数，使用当前生成的提示词")
+                image_prompts_with_role_desc.append(enhanced_prompt)
+                prompt_history.append({
+                    "page_index": idx,
+                    "action": "达到最大重试次数，使用提示词",
+                    "prompt": enhanced_prompt,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+                generation_stats["error_count"] += 1
+        
         # 4. 使用API生成图像
-        print(f"🎨 开始生成 {len(image_prompts_with_role_desc)} 张图像...")
-        images = []
-        for idx, prompt in enumerate(image_prompts_with_role_desc):
-            print(f"生成第 {idx + 1}/{len(image_prompts_with_role_desc)} 张图像...")
-            
-            # 调用API生成图像
-            img = self.generate_image_from_prompt(prompt)
-            
-            # 调整图像尺寸（如果配置中指定了）
-            target_width = self.cfg.get("width", 1024)
-            target_height = self.cfg.get("height", 512)
-            if img.size != (target_width, target_height):
-                img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
-            
-            images.append(img)
-            
-            # 保存图像
-            img.save(save_path / f"p{idx + 1}.png")
-            print(f"💾 已保存: {save_path / f'p{idx + 1}.png'}")
-            
-            # 避免API限流，稍微延时
-            if idx < len(image_prompts_with_role_desc) - 1:
-                time.sleep(1)
+        print("\n🎨 开始生成图像...")
+        save_path = params["save_path"]
         
-        print("✅ 所有图像生成完成！")
+        # 确保保存路径存在
+        os.makedirs(save_path, exist_ok=True)
+        
+        # 逐个生成图像，允许用户对每个图像进行交互
+        for idx, prompt in enumerate(image_prompts_with_role_desc):
+            image_accepted = False
+            image_retry_count = 0
+            max_image_retries = 3
+            error_history = []
+            
+            while not image_accepted and image_retry_count < max_image_retries:
+                print(f"\n{'='*60}")
+                print(f"🖼️  生成第 {idx + 1}/{len(image_prompts_with_role_desc)} 张图像")
+                print(f"{'='*60}")
+                print(f"💬 使用提示词: {prompt[:50]}...")
+                print(f"   提示词长度: {len(prompt)} 字符")
+                
+                # 生成单张图像
+                try:
+                    start_time = time.time()
+                    print("\n⏳ 正在调用AI图像生成服务...")
+                    print("   这可能需要几秒钟时间，请耐心等待...")
+                    
+                    img = self.generate_image_from_prompt(prompt)
+                    end_time = time.time()
+                    
+                    print(f"✅ 图像生成成功 (耗时: {end_time - start_time:.2f} 秒)")
+                    
+                    # 调整图像尺寸（如果配置中指定了）
+                    target_width = generation_params.get("width", self.cfg.get("width", 1024))
+                    target_height = generation_params.get("height", self.cfg.get("height", 512))
+                    if img.size != (target_width, target_height):
+                        print(f"📐 调整图像尺寸为 {target_width}x{target_height}")
+                        img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                    
+                    # 临时保存图像
+                    temp_path = save_path / f"temp_p{idx + 1}.png"
+                    img.save(temp_path)
+                    print(f"   临时保存路径: {temp_path}")
+                    
+                    # 提供图像操作选项
+                    print("\n🔧 请选择图像操作:")
+                    print("1. 保留当前图像")
+                    print("2. 重新生成图像")
+                    print("3. 修改提示词")
+                    print("4. 调整生成参数")
+                    print("5. 查看帮助")
+                    
+                    image_choice = self._get_user_choice(valid_options=['1', '2', '3', '4', '5'])
+                    
+                    if image_choice == '1':
+                        # 保存最终图像
+                        final_path = save_path / f"p{idx + 1}.png"
+                        img.save(final_path)
+                        generation_results.append(img)
+                        print(f"✅ 图像已接受并保存至: {final_path}")
+                        # 删除临时文件
+                        if temp_path.exists() and temp_path != final_path:
+                            os.remove(temp_path)
+                        image_accepted = True
+                        generation_stats["success_count"] += 1
+                        
+                    elif image_choice == '2':
+                        # 重新生成图像
+                        image_retry_count += 1
+                        print(f"🔄 正在重新生成图像... (重试 {image_retry_count}/{max_image_retries})")
+                        generation_stats["optimization_rounds"] += 1
+                        
+                    elif image_choice == '3':
+                        # 修改提示词
+                        print("\n✏️  修改图像提示词:")
+                        new_prompt = self._get_modification_input(prompt)
+                        if new_prompt:
+                            # 更新当前提示词
+                            image_prompts_with_role_desc[idx] = new_prompt
+                            prompt_history.append({
+                                "page_index": idx,
+                                "action": "图像生成阶段修改提示词",
+                                "original_prompt": prompt,
+                                "modified_prompt": new_prompt,
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                            print("✅ 提示词已更新")
+                            # 重置重试次数
+                            image_retry_count = 0
+                            # 更新当前提示词
+                            prompt = new_prompt
+                    
+                    elif image_choice == '4':
+                        # 调整生成参数
+                        new_params = self._adjust_generation_params()
+                        if new_params:
+                            generation_params.update(new_params)
+                            print("✅ 参数已更新")
+                    
+                    elif image_choice == '5':
+                        # 显示帮助
+                        self._show_help()
+                except Exception as e:
+                    error_msg = str(e)
+                    error_history.append(error_msg)
+                    print(f"❌ 图像生成失败: {error_msg}")
+                    image_retry_count += 1
+                    generation_stats["error_count"] += 1
+                    
+                    # 分析错误并给出建议
+                    if "API" in error_msg or "connection" in error_msg.lower():
+                        print("💡 建议: 检查网络连接和API配置")
+                    elif "timeout" in error_msg.lower():
+                        print("💡 建议: 尝试使用更短的提示词")
+                    elif "invalid" in error_msg.lower():
+                        print("💡 建议: 检查提示词内容是否包含不支持的内容")
+                    
+                    # 连续失败时提供更多选项
+                    if image_retry_count < max_image_retries:
+                        print("\n🔧 请选择操作:")
+                        print("1. 重试生成")
+                        print("2. 修改提示词")
+                        print("3. 调整生成参数")
+                        
+                        error_choice = self._get_user_choice(valid_options=['1', '2', '3'])
+                        if error_choice == '2':
+                            new_prompt = self._get_modification_input(prompt)
+                            if new_prompt:
+                                image_prompts_with_role_desc[idx] = new_prompt
+                                prompt = new_prompt
+                                image_retry_count = 0
+                        elif error_choice == '3':
+                            new_params = self._adjust_generation_params()
+                            if new_params:
+                                generation_params.update(new_params)
+            
+            if not image_accepted:
+                # 达到最大重试次数，使用最后生成的图像
+                print("⚠️  已达到最大重试次数，使用当前生成的图像")
+                if 'img' in locals():
+                    final_path = save_path / f"p{idx + 1}.png"
+                    img.save(final_path)
+                    generation_results.append(img)
+                    print(f"   已保存至: {final_path}")
+        
+        # 保存提示词历史记录和生成统计
+        try:
+            # 保存提示词历史
+            history_file = save_path / "prompt_history.json"
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(prompt_history, f, ensure_ascii=False, indent=2)
+            print(f"\n💾 提示词历史已保存至: {history_file}")
+            
+            # 保存生成统计
+            stats_file = save_path / "generation_stats.json"
+            generation_stats["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            generation_stats["total_images"] = len(generation_results)
+            with open(stats_file, "w", encoding="utf-8") as f:
+                json.dump(generation_stats, f, ensure_ascii=False, indent=2)
+            print(f"💾 生成统计已保存至: {stats_file}")
+            
+        except Exception as e:
+            print(f"⚠️  保存历史记录失败: {str(e)}")
+        
+        # 显示最终统计
+        print(f"\n{'='*60}")
+        print(f"🎉 图像生成和优化完成")
+        print(f"{'='*60}")
+        print(f"📊 生成统计:")
+        print(f"   • 总页数: {generation_stats['total_pages']}")
+        print(f"   • 成功生成图像数: {len(generation_results)}")
+        print(f"   • 优化轮数: {generation_stats['optimization_rounds']}")
+        print(f"   • 错误次数: {generation_stats['error_count']}")
+        print(f"   • 图像保存路径: {save_path}")
+        print(f"{'='*60}")
         
         return {
             "prompts": image_prompts_with_role_desc,
-            "generation_results": images,
+            "generation_results": generation_results,
+            "stats": generation_stats,
+            "history": prompt_history
         }
     
     # 复用原有的角色提取和prompt生成方法
@@ -948,7 +1491,7 @@ class DashScopeImageAgent:
             }
         })
         role_reviewer = init_tool_instance({
-            "tool": self.cfg.get("llm", "qwen"), # 从配置中获取LLM（大语言模型）的设置，如果没有找到，就使用默认值"qwen"。
+            "tool": self.cfg.get("llm", "qwen"),
             "cfg": {
                 "system_prompt": role_review_system,
                 "track_history": False
@@ -957,20 +1500,47 @@ class DashScopeImageAgent:
         roles = {}
         review = ""
         for turn in range(num_turns):  # dump相当于转为AI能看懂的json格式
-            roles, success = role_extractor.call(json.dumps({
+            try:
+                # 调用角色提取器
+                roles_result, success = role_extractor.call(json.dumps({
+                        "story_content": pages,
+                        "previous_result": roles,
+                        "improvement_suggestions": review,
+                    }, ensure_ascii=False
+                ))
+                
+                # 确保结果是字符串类型
+                if isinstance(roles_result, str):
+                    # 清理和解析JSON
+                    cleaned_result = roles_result.strip("```json").strip("```")
+                    try:
+                        roles = json.loads(cleaned_result)
+                        # 确保解析后的结果是字典
+                        if not isinstance(roles, dict):
+                            roles = {}
+                    except json.JSONDecodeError:
+                        print(f"⚠️  角色提取器返回的JSON格式无效，使用空角色字典")
+                        roles = {}
+                else:
+                    # 如果不是字符串，尝试转换或使用空字典
+                    roles = {}
+                
+                # 调用角色审查器
+                review, success = role_reviewer.call(json.dumps({
                     "story_content": pages,
-                    "previous_result": roles,
-                    "improvement_suggestions": review,
-                }, ensure_ascii=False
-            ))
-            # strip:移除开头与结尾的……
-            roles = json.loads(roles.strip("```json").strip("```"))
-            review, success = role_reviewer.call(json.dumps({
-                "story_content": pages,
-                "role_descriptions": roles
-            }, ensure_ascii=False))
-            if review == "Check passed.":
+                    "role_descriptions": roles
+                }, ensure_ascii=False))
+                
+                if review == "Check passed.":
+                    break
+            except Exception as e:
+                print(f"⚠️  角色提取过程中出错: {str(e)}")
                 break
+        
+        # 确保返回的是字典类型
+        if not isinstance(roles, dict):
+            roles = {}
+        
         return roles
 
 
