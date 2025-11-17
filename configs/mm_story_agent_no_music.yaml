@@ -1,4 +1,4 @@
-mage_generation:
+image_generation:
   cfg:
     height: 512
     id_length: 2

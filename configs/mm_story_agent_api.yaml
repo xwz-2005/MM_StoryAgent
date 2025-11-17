@@ -4,6 +4,8 @@ image_generation:
     llm: qwen
     num_turns: 3
     width: 1024
+    fast_mode: true
+    concurrency: 4
     # 新增可视化配置
     visualization:
       enable_visualization: true
@@ -16,6 +18,7 @@ image_generation:
 speech_generation:
   cfg:
     sample_rate: 16000
+    concurrency: 6
   params:
     voice: zh-CN-XiaoxiaoNeural
   tool: edge_tts
@@ -37,6 +40,7 @@ video_compose:
   params:
     audio_codec: mp3
     audio_sample_rate: 16000
+    compute_audio_energy: false
     caption:
       color: white
       font: C:/Windows/Fonts/msyh.ttc

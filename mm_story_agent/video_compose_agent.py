@@ -247,7 +247,8 @@ def compose_video(story_dir: Union[str, Path],
                   slide_duration: float = 0.4,
                   zoom_speed: float = 0.5,
                   move_ratio: float = 0.95,
-                  session_id: str = None):
+                  session_id: str = None,
+                  compute_audio_energy: bool = False):
     # 任务要求：已移除 sound_volume, music_volume, bg_speech_ratio, music_path 参数
     if not isinstance(story_dir, Path):
         story_dir = Path(story_dir)
@@ -373,22 +374,21 @@ def compose_video(story_dir: Union[str, Path],
                                    cur_duration + speech_clip.duration - fade_duration - slide_duration])
                 cur_duration += speech_clip.duration - slide_duration
 
-        # 安全地计算语音能量，避免索引错误
-        if 'has_speech' in locals() and has_speech and ('speech_rms' not in locals() or speech_rms is None):
-            try:
-                # 确保speech_file是有效的
-                if 'speech_files' in locals() and isinstance(speech_files, list) and speech_files:
-                    speech_file = speech_files[0]  # 使用第一个语音文件进行能量计算
-                
-                if 'speech_file' in locals() and speech_file and isinstance(speech_file, (str, Path)) and Path(speech_file).exists():
-                    speech_array, _ = librosa.core.load(str(speech_file), sr=None)
-                    speech_rms = librosa.feature.rms(y=speech_array)[0].mean()
-                    print(f"🔊 第{page}页语音能量: {speech_rms:.6f}")
-                else:
-                    speech_rms = 0.01  # 默认能量值
-            except Exception as e:
-                print(f"⚠️  计算语音能量时出错: {e}")
-                speech_rms = 0.01  # 出错时使用默认值
+        # 可选：计算语音能量（默认关闭以提速）
+        if compute_audio_energy:
+            if 'has_speech' in locals() and has_speech and ('speech_rms' not in locals() or speech_rms is None):
+                try:
+                    if 'speech_files' in locals() and isinstance(speech_files, list) and speech_files:
+                        speech_file = speech_files[0]
+                    if 'speech_file' in locals() and speech_file and isinstance(speech_file, (str, Path)) and Path(speech_file).exists():
+                        speech_array, _ = librosa.core.load(str(speech_file), sr=None)
+                        speech_rms = librosa.feature.rms(y=speech_array)[0].mean()
+                        print(f"🔊 第{page}页语音能量: {speech_rms:.6f}")
+                    else:
+                        speech_rms = 0.01
+                except Exception as e:
+                    print(f"⚠️  计算语音能量时出错: {e}")
+                    speech_rms = 0.01
 
         # set image as the main content, align the duration
         # 改进图像文件路径处理，移除./前缀
@@ -611,7 +611,8 @@ class SlideshowVideoComposeAgent:
                 audio_codec=params["audio_codec"],
                 caption_config=params["caption"],
                 **params["slideshow_effect"],
-                session_id=session_id  # 传递会话ID参数
+                session_id=session_id,  # 传递会话ID参数
+                compute_audio_energy=params.get("compute_audio_energy", False)
             )
             
             print(f"✅ 视频合成完成，已保存至: {save_path}")

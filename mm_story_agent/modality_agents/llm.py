@@ -4,6 +4,7 @@ import os
 from dashscope import Generation
 
 from mm_story_agent.base import register_tool
+from mm_story_agent.utils.cache import DiskCache
 
 
 """
@@ -48,6 +49,10 @@ class QwenAgent(object):
                 {"role": "system", "content": self.system_prompt}
             ]
         self.track_history = track_history
+        # 轻量磁盘缓存（默认开启，可用环境变量关闭）
+        self.enable_cache = config.get("enable_cache", True) and os.environ.get("LLM_CACHE", "1") != "0"
+        cache_dir = config.get("cache_dir", ".cache")
+        self.cache = DiskCache(cache_dir) if self.enable_cache else None
     
     def basic_success_check(self, response):
         if not response or not response.output or not response.output.text:
@@ -72,6 +77,32 @@ class QwenAgent(object):
 
         success = False
         try_times = 0
+
+        # 缓存命中检查
+        cache_key = None
+        if self.enable_cache:
+            import json
+            key_payload = {
+                "system": self.system_prompt or "",
+                "history": self.history if self.track_history else [self.history[-1]],
+                "model": model_name,
+                "top_p": top_p,
+                "temperature": temperature,
+                "seed": seed,
+                "max_length": max_length,
+            }
+            cache_key = json.dumps(key_payload, ensure_ascii=False)
+            cached = self.cache.get("qwen", cache_key)
+            if cached and isinstance(cached, dict) and "text" in cached:
+                response_text = cached["text"]
+                if success_check_fn is None or success_check_fn(response_text):
+                    # 清理历史（与原逻辑一致）
+                    if not self.track_history:
+                        if self.system_prompt is not None:
+                            self.history = self.history[:1]
+                        else:
+                            self.history = []
+                    return response_text, True
         # 2. 重试循环
         while try_times < max_try:
             # 调用通义千问API
@@ -94,6 +125,12 @@ class QwenAgent(object):
                     "role": "assistant",
                     "content": response
                 })
+                # 写入缓存
+                if self.enable_cache and cache_key is not None:
+                    try:
+                        self.cache.set("qwen", cache_key, {"text": response})
+                    except Exception:
+                        pass
                 success = True
                 break
             else:

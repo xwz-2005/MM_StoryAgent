@@ -172,15 +172,48 @@ class EdgeTTSAgent:
         pages: List = params["pages"]
         save_path: str = params["save_path"]
         generation_agent = EdgeTTSSynthesizer()
-        
-        for idx, page in enumerate(pages):
-            generation_agent.call(
-                save_file=save_path / f"p{idx + 1}.wav",
-                transcript=page,
-                voice=params.get("voice", "en-US-AriaNeural"),
-                sample_rate=self.cfg.get("sample_rate", 16000)
-            )
-        
-        return {
-            "modality": "speech"
-        }
+        voice = params.get("voice", "en-US-AriaNeural")
+        sample_rate = self.cfg.get("sample_rate", 16000)
+        concurrency = int(self.cfg.get("concurrency", 6))
+
+        async def _run_all():
+            import asyncio
+            sem = asyncio.Semaphore(concurrency)
+
+            async def _task(idx: int, text: str):
+                out_file = save_path / f"p{idx + 1}.wav"
+                async with sem:
+                    try:
+                        await generation_agent._synthesize(text, voice, str(out_file))
+                    except Exception:
+                        # 回退：生成一段短静音，避免中断
+                        import numpy as np
+                        from moviepy.audio.AudioClip import AudioArrayClip
+                        silence = AudioArrayClip(np.zeros((int(sample_rate * 1.0), 2)), fps=sample_rate)
+                        silence.write_audiofile(str(out_file), fps=sample_rate, codec="pcm_s16le", verbose=False, logger=None)
+
+            await asyncio.gather(*[_task(i, p) for i, p in enumerate(pages)])
+
+        # 在单一事件循环中并发合成
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            loop.run_until_complete(_run_all())
+        except Exception:
+            # 失败则退回串行
+            for idx, page in enumerate(pages):
+                generation_agent.call(
+                    save_file=save_path / f"p{idx + 1}.wav",
+                    transcript=page,
+                    voice=voice,
+                    sample_rate=sample_rate
+                )
+
+        return {"modality": "speech"}

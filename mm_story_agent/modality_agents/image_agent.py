@@ -791,6 +791,9 @@ class DashScopeImageAgent:
         self.api_key = os.environ.get('DASHSCOPE_API_KEY')
         if not self.api_key:
             raise ValueError("请设置环境变量 DASHSCOPE_API_KEY")
+        # 性能相关配置
+        self.fast_mode = bool(self.cfg.get("fast_mode", True))
+        self.concurrency = int(self.cfg.get("concurrency", 4))
     
     def generate_image_from_prompt(self, prompt: str, style: str = "auto") -> Image.Image:
         """
@@ -1059,6 +1062,84 @@ class DashScopeImageAgent:
             print(f"❌ 提示词生成失败: {str(e)}")
             print("❌ 系统无法继续，请检查配置和网络连接")
             return {"error": "Prompt generation failed"}
+
+        # ========== 快速模式：并行生成，无交互 ==========
+        if self.fast_mode:
+            print("\n⚡ 启动快速模式：跳过交互，开启并行生成图像")
+            # 根据角色增强提示词
+            image_prompts_with_role_desc = []
+            for prompt in image_prompts:
+                enhanced = prompt
+                for role, role_desc in role_dict.items():
+                    if role in enhanced:
+                        enhanced = enhanced.replace(role, role_desc)
+                image_prompts_with_role_desc.append(enhanced)
+
+            # 目标尺寸
+            target_width = int(self.cfg.get("width", 1024))
+            target_height = int(self.cfg.get("height", 512))
+
+            save_path = params["save_path"]
+            if not isinstance(save_path, Path):
+                save_path = Path(save_path)
+            save_path.mkdir(parents=True, exist_ok=True)
+
+            # 可视化工具
+            story_dir = Path(params["save_path"]).parent
+            viz_tool = VisualizationTool(output_dir=str(story_dir / "visualizations"))
+
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def _worker(idx: int, prompt: str, page_text: str):
+                img = self.generate_image_from_prompt(prompt)
+                if img.size != (target_width, target_height):
+                    img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                # 暂存
+                tmp = save_path / f"temp_p{idx+1}.png"
+                img.save(tmp)
+
+                # 自动数据可视化
+                try:
+                    detected = viz_tool.detect_data_in_story(page_text)
+                    if detected:
+                        chart_path = viz_tool.generate_chart_from_story(page_text, chart_type="auto", page_index=idx)
+                        if chart_path:
+                            combined = save_path / f"p{idx+1}_with_chart.png"
+                            viz_tool.combine_image_with_chart(str(tmp), chart_path, str(combined), layout=self.cfg.get("visualization", {}).get("chart_layout", "bottom"))
+                            final = save_path / f"p{idx+1}.png"
+                            # 覆盖最终命名
+                            import shutil
+                            shutil.copy2(combined, final)
+                            # 清理临时文件
+                            if tmp.exists():
+                                os.remove(tmp)
+                            return str(final)
+                except Exception:
+                    pass
+
+                # 无可视化或失败则直接保存
+                final = save_path / f"p{idx+1}.png"
+                img.save(final)
+                if tmp.exists():
+                    os.remove(tmp)
+                return str(final)
+
+            futures = []
+            with ThreadPoolExecutor(max_workers=self.concurrency) as ex:
+                for i, (pmt, page_text) in enumerate(zip(image_prompts_with_role_desc, params["pages"])):
+                    futures.append(ex.submit(_worker, i, pmt, page_text))
+                completed = 0
+                for f in as_completed(futures):
+                    _ = f.result()
+                    completed += 1
+                    print(f"✅ 并行图像进度: {completed}/{len(futures)}")
+
+            print("\n🎉 快速模式生成完成")
+            return {
+                "prompts": image_prompts_with_role_desc,
+                "generation_results": [],
+                "stats": {"total_pages": len(params["pages"]), "mode": "fast", "concurrency": self.concurrency}
+            }
         
         # 存储处理后的提示词和图像
         image_prompts_with_role_desc = []
