@@ -32,7 +32,7 @@ def is_valid_json(text: str) -> bool:
     except (json.JSONDecodeError, TypeError):
         return False
 
-# 新增：敏感词过滤列表（可扩展）
+# 敏感词过滤列表
 SENSITIVE_WORDS = [
     # 暴力相关
     "杀人", "暴力", "抢劫", "斗殴", "凶器", "自杀", "自残",
@@ -44,7 +44,7 @@ SENSITIVE_WORDS = [
     "血腥", "恐怖", "惊悚", "虐待", "霸凌", "歧视"
 ]
 
-# 新增：合规替换映射（将敏感表述替换为合规表达）
+# 合规替换映射（将敏感表述替换为合规表达）
 COMPLIANCE_REPLACE = {
     "杀人": "制止不法行为",
     "暴力": "冲突",
@@ -79,7 +79,6 @@ class ComplianceFilter:
                 sensitive_found.append(word)
         return len(sensitive_found) == 0, sensitive_found
 
-# 增强的系统提示（添加合规要求）
 LONG_TEXT_SUMMARIZER_SYSTEM = """
 你是一名专业的文本摘要分析师，需要从长文本中提取故事创作所需的关键信息。
 请严格按照以下要求输出：
@@ -96,7 +95,6 @@ LONG_TEXT_SUMMARIZER_SYSTEM = """
 {"核心主题": "友谊与成长", "主要角色": "小明（勇敢的小学生）、小红（细心的班长）", "关键场景": "周末的公园、学校教室", "核心情节": "小明丢失书包，小红帮忙寻找，两人克服困难成为好友", "情感基调": "温暖、积极"}
 """
 
-# 新增：章节生成系统提示（添加合规约束）
 CHAPTER_WRITER_SYSTEM_COMPLIANCE = """
 你是专业的故事章节作家，需按照以下要求生成内容：
 1. 内容必须符合中国法律法规和公序良俗，禁止暴力、血腥、色情、赌博等违规敏感元素
@@ -909,9 +907,10 @@ class QAOutlineStoryWriter:
                 print("\n🔧 是否添加更多故事设置?")
                 print("1. 添加主角信息（需合规）")
                 print("2. 添加背景设定（需合规）")
-                print("3. 跳过，直接生成")
+                print("3. 输入参考长文本") 
+                print("4. 跳过，直接生成") 
                 
-                setting_choice = self._get_user_choice(valid_options=['1', '2', '3'])
+                setting_choice = self._get_user_choice(valid_options=['1', '2', '3', '4'])
                 
                 if setting_choice == '1':
                     while True:
@@ -942,7 +941,46 @@ class QAOutlineStoryWriter:
                         params["background"] = self.compliance_filter.filter_sensitive(background)
                         print(f"✅ 已添加背景设定: {params['background']}")
                         break
-                
+                elif setting_choice == '3':
+                    print("\n📄 请输入参考长文本（支持小说片段、情节描述等，将自动总结）:")
+                    print("   提示：输入完成后按Ctrl+D（Linux/Mac）或Ctrl+Z（Windows）结束输入")
+                    print("   输入 'cancel' 可取消此操作")
+                    
+                    try:
+                        # 读取多行输入
+                        long_text_lines = []
+                        while True:
+                            line = input()
+                            if line.lower() == 'cancel':
+                                print("⚠️  已取消长文本输入")
+                                long_text_lines = []
+                                break
+                            long_text_lines.append(line)
+                        
+                        if long_text_lines:
+                            long_text = '\n'.join(long_text_lines)
+                            # 合规校验
+                            is合规, sensitive_words = self.compliance_filter.check_compliance(long_text)
+                            if not is合规:
+                                print(f"❌ 长文本包含敏感词：{','.join(sensitive_words)}")
+                                # 调用合规错误处理
+                                long_text = self._handle_compliance_error(long_text, "长文本")
+                            
+                            params["long_text"] = long_text
+                            print(f"✅ 已接收长文本（{len(long_text)}字符），将自动进行内容总结")
+                            # 提前展示长文本处理状态
+                            if len(long_text) > self.long_text_threshold:
+                                print(f"ℹ️  检测到长文本超过{self.long_text_threshold}字符，将进行分段总结")
+                    except EOFError:
+                        # 用户完成输入
+                        if long_text_lines:
+                            long_text = '\n'.join(long_text_lines)
+                            params["long_text"] = self.compliance_filter.filter_sensitive(long_text)
+                            print(f"✅ 已接收长文本（{len(long_text)}字符），将自动进行内容总结")
+                        else:
+                            print("⚠️  未输入任何内容，已取消")
+                    except Exception as e:
+                        print(f"❌ 长文本处理错误: {str(e)}")
                 break
             except Exception as e:
                 print(f"❌ 输入错误: {str(e)}，请重试")
