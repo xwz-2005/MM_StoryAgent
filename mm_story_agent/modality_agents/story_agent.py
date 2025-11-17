@@ -64,7 +64,7 @@ class ComplianceFilter:
         filtered_text = text
         for sensitive, replacement in COMPLIANCE_REPLACE.items():
             filtered_text = filtered_text.replace(sensitive, replacement)
-        # 二次过滤剩余敏感词（直接删除）
+        # 二次过滤剩余敏感词
         for word in SENSITIVE_WORDS:
             if word not in COMPLIANCE_REPLACE:
                 filtered_text = filtered_text.replace(word, "")
@@ -117,7 +117,7 @@ class QAOutlineStoryWriter:
         self.compliance_filter = ComplianceFilter()  # 初始化合规过滤器
 
     def _summarize_long_text(self, long_text: str) -> Dict:
-        """总结长文本并提取关键信息（含合规过滤）"""
+        """总结长文本并提取关键信息"""
         print("📄 正在处理长文本...")
         # 先过滤长文本中的敏感内容
         filtered_long_text = self.compliance_filter.filter_sensitive(long_text)
@@ -181,16 +181,16 @@ class QAOutlineStoryWriter:
             
             while retry_count < self.max_retry and final_summary is None:
                 combine_prompt = f"""
-请整合以下{len(chunk_summaries)}个片段摘要，生成完整的长文本摘要。
-要求：
-1. 仅返回JSON对象，无任何额外内容
-2. 合并重复信息，补充缺失信息，所有内容必须合规无敏感元素
-3. 字段保持与片段摘要一致：核心主题、主要角色、关键场景、核心情节、情感基调
-4. 确保JSON格式标准，无语法错误，符合中国法律法规和公序良俗
+                    请整合以下{len(chunk_summaries)}个片段摘要，生成完整的长文本摘要。
+                    要求：
+                    1. 仅返回JSON对象，无任何额外内容
+                    2. 合并重复信息，补充缺失信息，所有内容必须合规无敏感元素
+                    3. 字段保持与片段摘要一致：核心主题、主要角色、关键场景、核心情节、情感基调
+                    4. 确保JSON格式标准，无语法错误，符合中国法律法规和公序良俗
 
-片段摘要：
-{json.dumps(chunk_summaries, ensure_ascii=False, indent=2)}
-"""
+                    片段摘要：
+                    {json.dumps(chunk_summaries, ensure_ascii=False, indent=2)}
+                    """
                 summary, success = summarizer.call(combine_prompt, temperature=self.temperature)
                 if success and summary.strip():
                     clean_summary = summary.strip("```json").strip("```").strip()
@@ -215,7 +215,7 @@ class QAOutlineStoryWriter:
         return chunk_summaries[0]
 
     def _split_long_text(self, text: str, chunk_size: int = 2000) -> List[str]:
-        """将长文本分割为适合模型处理的片段（合规优化）"""
+        """将长文本分割为适合模型处理的片段"""
         chunks = []
         if len(text) <= chunk_size:
             return [text]
@@ -242,7 +242,7 @@ class QAOutlineStoryWriter:
         return chunks
     
     def _analyze_story_style(self, story_setting):
-        """主题风格自动分析（新增合规校验）"""
+        """主题风格自动分析"""
         print("🔍 正在进行主题风格自动分析...")
         
         # 先过滤故事设置中的敏感内容
@@ -306,7 +306,7 @@ class QAOutlineStoryWriter:
         if sensitive_words:
             print(f"\n⚠️  检测到可能的敏感词：{','.join(sensitive_words)}")
         
-        print(f"\n✏️  请修改{error_source}内容（移除敏感表述，保持积极合规）：")
+        print(f"\n✏️  请修改{error_source}内容：")
         print(f"当前内容：{input_content[:100]}..." if len(input_content) > 100 else f"当前内容：{input_content}")
         
         while True:
@@ -326,7 +326,7 @@ class QAOutlineStoryWriter:
                 print(f"❌ 修改后的内容仍包含敏感词：{','.join(sensitive_words)}，请再次修改")
     
     def generate_outline(self, params):
-        """生成故事大纲（新增合规预处理）"""
+        """生成故事大纲"""
         # 先过滤params中的敏感内容
         filtered_params = {}
         for key, value in params.items():
@@ -469,7 +469,7 @@ class QAOutlineStoryWriter:
         return valid_options[0]
     
     def _show_help(self):
-        """显示帮助信息（新增合规提示）"""
+        """显示帮助信息"""
         print("\n📚 帮助信息:")
         print("   • 在任何输入提示时，输入 'help'、'帮助' 或 '?' 可显示此帮助")
         print("   • 所有操作都会被记录在edit_history.json中")
@@ -480,7 +480,7 @@ class QAOutlineStoryWriter:
         print()
     
     def _get_modification_input(self, content_type="内容"):
-        """获取用户修改意见（含合规校验）"""
+        """获取用户修改意见"""
         print(f"\n✏️  请输入您对{content_type}的修改意见（需合规，无敏感内容）:")
         print("   示例: '增加主角的心理活动' 或 '让场景更温暖一些'")
         print("   提示: 更具体的修改意见会获得更好的结果")
@@ -511,7 +511,7 @@ class QAOutlineStoryWriter:
                 print("❌ 输入错误，请重试")
     
     def _modify_content(self, original_content, chapter, all_pages):
-        """处理内容修改（含合规过滤）"""
+        """处理内容修改"""
         modification = self._get_modification_input("章节")
         if modification is None:
             return original_content
@@ -597,8 +597,8 @@ class QAOutlineStoryWriter:
                     print("❌ 输入错误，请输入有效的整数")
     
     def generate_story_from_outline(self, outline):
-        """根据大纲生成故事（新增审核失败处理）"""
-        # 初始化章节生成代理（添加合规提示）
+        """根据大纲生成故事"""
+        # 初始化章节生成代理
         chapter_writer = init_tool_instance({
             "tool": self.llm_type,
             "cfg": {
@@ -610,8 +610,8 @@ class QAOutlineStoryWriter:
         edit_history = []
         modify_count = 0
         
-        # 显示大纲概览（合规校验）
-        print(f"\n📋 故事大纲概览 (已合规处理):")
+        # 显示大纲概览
+        print(f"\n📋 故事大纲概览:")
         for i, chap in enumerate(outline["story_outline"], 1):
             filtered_title = self.compliance_filter.filter_sensitive(chap['chapter_title'])
             filtered_summary = self.compliance_filter.filter_sensitive(chap['chapter_summary'])
@@ -653,9 +653,9 @@ class QAOutlineStoryWriter:
                     temperature=self.temperature
                 )
                 
-                # 处理审核失败（400 DataInspectionFailed）
+                # 处理审核失败
                 if not success:
-                    # 检查是否为审核失败（根据返回信息判断）
+                    # 检查是否为审核失败
                     if isinstance(chapter_detail, dict) and chapter_detail.get("code") == "DataInspectionFailed":
                         print(f"❌ 章节 {idx+1} 触发内容审核失败")
                         # 引导用户修改章节摘要
