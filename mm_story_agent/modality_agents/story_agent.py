@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List
+from typing import Dict, List,Tuple
 import random
 import time
 from tqdm import trange, tqdm
@@ -53,21 +53,68 @@ COMPLIANCE_REPLACE = {
     "恐怖": "紧张"
 }
 
+CONTENT_TYPES = {
+    "人物传记": {
+        "keywords": ["生平", "传记", "经历", "人生", "事迹", "回忆录"],
+        "system_prompt": "你是专业传记作家，需客观真实地记录人物生平，按时间线梳理关键事件，突出人物成长与贡献，语言庄重且富有感染力",
+        "outline_structure": ["早期经历", "关键转折", "主要成就", "影响与传承"],
+        "compliance_notes": "避免虚构未经证实的事件，尊重历史事实，不涉及人身攻击"
+    },
+    "科普故事": {
+        "keywords": ["科学", "知识", "原理", "科普", "现象", "实验", "技术"],
+        "system_prompt": "你是科普故事创作者，需将专业知识转化为生动故事，兼顾科学性与趣味性，语言通俗易懂，逻辑清晰",
+        "outline_structure": ["现象引入", "原理讲解", "生活应用", "拓展思考"],
+        "compliance_notes": "确保科学知识准确无误，避免伪科学内容，复杂概念需简化解释"
+    },
+    "产品教程": {
+        "keywords": ["使用", "教程", "操作", "指南", "步骤", "功能", "产品"],
+        "system_prompt": "你是产品教程编写专家，需清晰展示产品使用步骤，语言简洁明了，步骤条理清晰，注重实用性与可操作性",
+        "outline_structure": ["产品介绍", "基础操作", "高级功能", "常见问题"],
+        "compliance_notes": "不夸大产品功效，不进行虚假宣传，操作说明需准确无误"
+    },
+    "历史事件": {
+        "keywords": ["历史", "事件", "年代", "史实", "战役", "运动", "变革"],
+        "system_prompt": "你是历史叙事专家，需基于史实还原历史事件，兼顾客观性与故事性，展现事件背景、过程与影响",
+        "outline_structure": ["背景起因", "事件经过", "关键人物", "历史意义"],
+        "compliance_notes": "尊重历史事实，不歪曲篡改历史，避免敏感历史评价争议"
+    },
+    "虚构故事": { 
+        "keywords": ["故事", "小说", "情节", "角色", "奇幻", "科幻", "日常"],
+        "system_prompt": "你是虚构故事作家，需创作引人入胜的情节，塑造鲜明角色，语言生动形象，富有想象力",
+        "outline_structure": ["开端", "发展", "高潮", "结局"],
+        "compliance_notes": "内容积极健康，符合公序良俗，避免低俗暴力情节"
+    }
+}
+
 class ComplianceFilter:
     """合规内容过滤器"""
     @staticmethod
-    def filter_sensitive(text: str) -> str:
-        """过滤敏感词，替换为合规表述"""
+    def filter_sensitive(text: str, content_type: str = "虚构故事") -> str:
+        """根据内容类型过滤敏感词"""
         if not text:
             return text
-        # 替换敏感词
+        
+        # 基础敏感词替换
         filtered_text = text
         for sensitive, replacement in COMPLIANCE_REPLACE.items():
             filtered_text = filtered_text.replace(sensitive, replacement)
+        
+        # 针对不同内容类型的专项过滤
+        type_specific_filters = {
+            "人物传记": ["诽谤", "污蔑", "虚假"],
+            "科普故事": ["伪科学", "错误结论", "谣言"],
+            "产品教程": ["最佳", "第一", "绝对", "无效"], 
+            "历史事件": ["歪曲", "篡改", "伪造历史"]
+        }
+        
+        for word in type_specific_filters.get(content_type, []):
+            filtered_text = filtered_text.replace(word, "[敏感表述已过滤]")
+            
         # 二次过滤剩余敏感词
         for word in SENSITIVE_WORDS:
             if word not in COMPLIANCE_REPLACE:
                 filtered_text = filtered_text.replace(word, "")
+                
         return filtered_text.strip()
     
     @staticmethod
@@ -102,6 +149,8 @@ CHAPTER_WRITER_SYSTEM_COMPLIANCE = """
 3. 语言文明规范，无脏话、不适当表述
 4. 严格遵循故事大纲，保持内容连贯性和逻辑性
 5. 输出格式为列表字符串（如["页面1内容", "页面2内容"]），无额外文字
+6. 严格避免重复前文已详细描述的内容，当前章节需聚焦自身核心事件，仅在必要时简要回顾前文（不超过1句话）。
+7. 若检测到与前文重复的句子或段落，需重新表述并聚焦当前章节的独特信息。
 """
 
 @register_tool("qa_outline_story_writer")
@@ -114,8 +163,40 @@ class QAOutlineStoryWriter:
         self.llm_type = cfg.get("llm", "qwen")
         self.long_text_threshold = cfg.get("long_text_threshold", 500)
         self.max_retry = cfg.get("max_retry", 2)
-        self.compliance_filter = ComplianceFilter()  # 初始化合规过滤器
+        self.compliance_filter = ComplianceFilter()
+        self.content_type = "虚构故事"
 
+    def _detect_content_type(self, input_text: str) -> str:
+        """自动检测内容类型"""
+        input_text = input_text.lower()
+        type_scores = {type_name: 0 for type_name in CONTENT_TYPES}
+        
+        for type_name, config in CONTENT_TYPES.items():
+            for keyword in config["keywords"]:
+                if keyword in input_text:
+                    type_scores[type_name] += 1
+        
+        # 找到得分最高的类型
+        max_score = max(type_scores.values())
+        if max_score == 0:
+            return "虚构故事"  # 默认类型
+        
+        return [type_name for type_name, score in type_scores.items() if score == max_score][0]
+    
+    def _confirm_content_type(self, detected_type: str) -> str:
+        """让用户确认内容类型"""
+        print(f"\n🔍 检测到您可能想要创作: {detected_type}")
+        print("请确认内容类型 (输入序号):")
+        for i, type_name in enumerate(CONTENT_TYPES.keys(), 1):
+            print(f"{i}. {type_name}")
+        
+        choice = self._get_user_choice(
+            prompt="请选择内容类型: ",
+            valid_options=[str(i) for i in range(1, len(CONTENT_TYPES)+1)]
+        )
+        
+        return list(CONTENT_TYPES.keys())[int(choice)-1]
+    
     def _summarize_long_text(self, long_text: str) -> Dict:
         """总结长文本并提取关键信息"""
         print("📄 正在处理长文本...")
@@ -241,57 +322,30 @@ class QAOutlineStoryWriter:
         
         return chunks
     
-    def _analyze_story_style(self, story_setting):
-        """主题风格自动分析"""
-        print("🔍 正在进行主题风格自动分析...")
+    def _analyze_content_features(self, content_setting) -> Tuple[str, str]:
+        """分析内容特征"""
+        print("🔍 正在分析内容特征...")
         
-        # 先过滤故事设置中的敏感内容
-        setting_str = self.compliance_filter.filter_sensitive(json.dumps(story_setting, ensure_ascii=False))
+        # 检测并确认内容类型
+        setting_str = json.dumps(content_setting, ensure_ascii=False)
+        detected_type = self._detect_content_type(setting_str)
+        self.content_type = self._confirm_content_type(detected_type)
         
-        keywords = {
-            "日常写实": [
-                "学校", "宿舍", "公司", "家庭", "医院", "公园", "商场", "街道", "办公室",
-                "教室", "图书馆", "餐厅", "咖啡厅", "车站", "机场", "银行", "超市",
-                "学生", "老师", "医生", "护士", "警察", "消防员", "工程师", "程序员",
-                "设计师", "销售人员", "服务员", "厨师", "司机", "科学家", "研究员",
-                "上课", "学习", "工作", "吃饭", "睡觉", "散步", "购物", "运动", "聊天",
-                "阅读", "编程", "开会", "考试", "通勤", "打扫", "做饭", "健身"
-            ],
-            "奇幻": [
-                "魔法", "巫师", "女巫", "咒语", "魔棒", "城堡", "王国", "公主", "王子",
-                "龙", "精灵", "矮人", "兽人", "半兽人", "魔法书", "药水", "宝石", "神器",
-                "超自然", "神秘力量", "异世界", "穿越", "时空", "预言", "传说", "神话",
-                "会说话的动物", "妖怪", "怪物", "幽灵", "鬼魂", "吸血鬼", "狼人"
-            ],
-            "科幻": [
-                "未来", "科技", "人工智能", "机器人", "太空", "宇宙", "星球", "飞船",
-                "太空站", "宇航员", "外星生物", "UFO", "飞碟", "激光", "纳米技术", "克隆",
-                "量子", "虚拟现实", "增强现实", "赛博朋克", "未来城市", "机械臂", "芯片",
-                "基因工程", "时间旅行", "平行宇宙", "黑洞", "超光速"
-            ]
-        }
+        # 获取该类型的配置
+        type_config = CONTENT_TYPES[self.content_type]
         
-        scores = {style: 0 for style in keywords.keys()}
-        for style, style_keywords in keywords.items():
-            for keyword in style_keywords:
-                if keyword in setting_str:
-                    scores[style] += 1
+        # 生成针对性规则
+        features = f"""
+        内容类型: {self.content_type}
+        核心特征: {type_config['system_prompt']}
+        结构要求: 建议按以下结构展开 - {type_config['outline_structure']}
+        合规要点: {type_config['compliance_notes']}
+        """
         
-        dominant_style = max(scores, key=scores.get)
-        if scores[dominant_style] == 0:
-            dominant_style = "日常写实"
+        print(f"✅ 内容特征分析完成: {self.content_type}")
+        print(f"📝 创作规则: {features}")
         
-        # 风格规则添加合规约束
-        style_rules = {
-            "日常写实": "仅包含现实中存在的场景（如学校、宿舍）、角色（如学生、老师）和行为（如上课、编程），禁止任何虚构元素和违规敏感内容，符合公序良俗",
-            "奇幻": "允许包含魔法、虚构生物等奇幻元素，场景和角色可虚构，但需符合奇幻逻辑，禁止暴力、血腥等违规内容，符合公序良俗",
-            "科幻": "聚焦未来科技、太空探索等元素，禁止无逻辑的超自然力量和违规敏感内容，需符合科学幻想设定和公序良俗"
-        }
-        
-        print(f"✅ 风格分析完成: {dominant_style}")
-        print(f"📝 生成规则: {style_rules[dominant_style]}")
-        
-        return dominant_style, style_rules[dominant_style]
+        return self.content_type, features
     
     def _handle_compliance_error(self, input_content: str, error_source: str) -> str:
         """处理内容审核失败，引导用户修改输入"""
@@ -326,43 +380,46 @@ class QAOutlineStoryWriter:
                 print(f"❌ 修改后的内容仍包含敏感词：{','.join(sensitive_words)}，请再次修改")
     
     def generate_outline(self, params):
-        """生成故事大纲"""
-        # 先过滤params中的敏感内容
+        """生成多样化内容大纲"""
+        # 过滤敏感内容
         filtered_params = {}
         for key, value in params.items():
             if isinstance(value, str):
-                filtered_params[key] = self.compliance_filter.filter_sensitive(value)
+                filtered_params[key] = self.compliance_filter.filter_sensitive(
+                    value, self.content_type)
             else:
                 filtered_params[key] = value
         
-        # 检查长文本输入
+        # 处理长文本
         if "long_text" in filtered_params and len(filtered_params["long_text"]) > self.long_text_threshold:
             summary = self._summarize_long_text(filtered_params["long_text"])
-            story_setting = {
-                "story_topic": summary.get("核心主题", "基于长文本的合规故事"),
-                "main_role": summary.get("主要角色", "未明确角色"),
-                "scene": summary.get("关键场景", "未明确场景"),
-                "emotional_tone": summary.get("情感基调", "积极"),
-                "core_plot": summary.get("核心情节", "")
+            content_setting = {
+                "topic": summary.get("核心主题", f"基于长文本的{self.content_type}"),
+                "main_elements": summary.get("主要角色" if self.content_type == "虚构故事" else "关键要素", "未明确要素"),
+                "scenes": summary.get("关键场景", "未明确场景"),
+                "tone": summary.get("情感基调", "适中"),
+                "core_content": summary.get("核心情节" if self.content_type == "虚构故事" else "核心内容", "")
             }
-            print("📝 长文本处理完成，生成合规故事设置")
+            print(f"📝 长文本处理完成，生成{self.content_type}设置")
         else:
-            story_setting = filtered_params
+            content_setting = filtered_params
         
-        # 主题风格分析
-        dominant_style, style_rule = self._analyze_story_style(story_setting)
+        # 分析内容特征
+        content_type, type_features = self._analyze_content_features(content_setting)
         
+        # 初始化对话代理（根据内容类型调整提示词）
         asker = init_tool_instance({
             "tool": self.llm_type,
             "cfg": {
-                "system_prompt": question_asker_system + "\n注意：所有提问必须合规，无敏感内容",
+                "system_prompt": f"{question_asker_system}\n针对{content_type}创作，提问需聚焦核心要素和结构合理性",
                 "track_history": False
             }
         })
+        
         expert = init_tool_instance({
             "tool": self.llm_type,
             "cfg": {
-                "system_prompt": expert_system + "\n注意：所有回答必须合规，无敏感内容，符合公序良俗",
+                "system_prompt": f"{expert_system}\n针对{content_type}创作，回答需专业准确，符合该类型创作规范",
                 "track_history": False
             }
         })
@@ -389,16 +446,17 @@ class QAOutlineStoryWriter:
         writer = init_tool_instance({
             "tool": self.llm_type,
             "cfg": {
-                "system_prompt": dlg_based_writer_system + "\n所有大纲内容必须合规，无敏感元素，符合公序良俗",
+                "system_prompt": f"{dlg_based_writer_system}\n{CONTENT_TYPES[content_type]['system_prompt']}\n所有内容必须符合该类型的合规要求",
                 "track_history": False
             }
         })
+        
         writer_prompt = dlg_based_writer_prompt.format(
             story_setting=filtered_params,
             dialogue_history="\n".join(dialogue),
             num_outline=self.num_outline,
-            style_type=dominant_style,
-            style_rule=style_rule + "，内容必须合规，无敏感元素"
+            style_type=content_type,
+            style_rule=type_features
         )
         
         # 大纲生成重试校验
@@ -597,15 +655,17 @@ class QAOutlineStoryWriter:
                     print("❌ 输入错误，请输入有效的整数")
     
     def generate_story_from_outline(self, outline):
-        """根据大纲生成故事"""
-        # 初始化章节生成代理
+        """根据大纲生成多样化内容"""
+        # 根据内容类型初始化专用生成器
+        type_config = CONTENT_TYPES[self.content_type]
         chapter_writer = init_tool_instance({
             "tool": self.llm_type,
             "cfg": {
-                "system_prompt": CHAPTER_WRITER_SYSTEM_COMPLIANCE,
+                "system_prompt": f"{type_config['system_prompt']}\n{CHAPTER_WRITER_SYSTEM_COMPLIANCE}\n{type_config['compliance_notes']}",
                 "track_history": False
             }
         })
+        
         all_pages = []
         edit_history = []
         modify_count = 0
@@ -621,8 +681,10 @@ class QAOutlineStoryWriter:
             print(f"\n{'='*60}")
             # 合规处理章节信息
             filtered_chapter = {
-                "chapter_title": self.compliance_filter.filter_sensitive(chapter['chapter_title']),
-                "chapter_summary": self.compliance_filter.filter_sensitive(chapter['chapter_summary'])
+                "chapter_title": self.compliance_filter.filter_sensitive(
+                    chapter['chapter_title'], self.content_type),
+                "chapter_summary": self.compliance_filter.filter_sensitive(
+                    chapter['chapter_summary'], self.content_type)
             }
             print(f"📖 正在生成第 {idx + 1} 章节: {filtered_chapter['chapter_title']}")
             print(f"{'='*60}")
@@ -637,13 +699,13 @@ class QAOutlineStoryWriter:
                 print(f"🔄 正在生成章节内容... (temperature={self.temperature:.2f})")
                 
                 # 准备合规的输入参数
-                input_data = json.dumps(
-                    {
-                        "completed_story": all_pages,
-                        "current_chapter": filtered_chapter
-                    },
-                    ensure_ascii=False
-                )
+                recent_context = all_pages[-1] if all_pages else []
+                input_data = json.dumps({
+                    "completed_content": recent_context,
+                    "current_chapter": filtered_chapter,
+                    "content_type": self.content_type,
+                    "structural_requirements": type_config["outline_structure"]
+                }, ensure_ascii=False)
                 filtered_input = self.compliance_filter.filter_sensitive(input_data)
                 
                 # 调用LLM生成
@@ -860,7 +922,7 @@ class QAOutlineStoryWriter:
         print(f"🎭 启动交互式合规故事生成系统")
         print(f"{'✨'*30}")
         
-        # 系统提示（新增合规说明）
+        # 系统提示
         print("\n💡 系统提示:")
         print("   • 您可以在每个环节进行内容审核和修改")
         print("   • 连续多次重新生成会触发参数调整建议")
@@ -875,7 +937,7 @@ class QAOutlineStoryWriter:
         print(f"   • 大纲章节数: {self.num_outline}")
         print(f"   • 解析重试次数(max_retry): {self.max_retry}")
         
-        # 获取用户主题输入（含合规校验）
+        # 获取用户主题输入
         print("\n📝 请指定故事主题（需积极合规，无敏感内容）:")
         print("   示例: '友谊与成长'、'科学探索'、'日常暖心故事'等")
         print("   输入 'help' 获取帮助，直接回车使用默认主题")
