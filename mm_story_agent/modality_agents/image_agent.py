@@ -8,6 +8,10 @@ import requests
 from io import BytesIO
 from PIL import Image
 from pathlib import Path
+import threading
+"""\n全局速率控制对象：\n在 Windows 多进程 spawn 反序列化场景下，实例或类属性中的 Lock 无法可靠保持，\n改为模块级对象确保每个子进程重新导入模块时都能创建。\n注意：不同进程间不会共享锁状态，API限流仍可能由跨进程并发触发。若需全局串行，可改为只在主进程内执行图像生成。\n"""
+GLOBAL_RATE_LOCK = threading.Lock()
+GLOBAL_LAST_CALL_TIME = 0.0
 
 import numpy as np
 import torch
@@ -794,6 +798,15 @@ class DashScopeImageAgent:
         # 性能相关配置
         self.fast_mode = bool(self.cfg.get("fast_mode", True))
         self.concurrency = int(self.cfg.get("concurrency", 4))
+        # 限流配置：最小间隔(秒) + 最大重试 + 初始退避
+        self.min_interval = float(self.cfg.get("min_interval", 0.6))  # 每次API调用间隔，避免速率封顶
+        self.max_retries = int(self.cfg.get("max_retries", 5))
+        self.base_backoff = float(self.cfg.get("base_backoff", 1.5))
+        self.backoff_jitter = float(self.cfg.get("backoff_jitter", 0.3))
+        # 自适应降速参数
+        self._adaptive_factor = 1.0
+        self._recent_429 = 0
+        # 移除类级锁的延迟创建方式，改用模块级锁（见文件顶部全局变量），避免pickle后缺失
     
     def generate_image_from_prompt(self, prompt: str, style: str = "auto") -> Image.Image:
         """
@@ -813,47 +826,62 @@ class DashScopeImageAgent:
         from dashscope import ImageSynthesis
         
         # 调用通义万相API
-        try:
-            response = ImageSynthesis.call(
-                model='wanx-v1',  # 通义万相模型
-                prompt=prompt,
-                n=1,  # 生成1张图片
-                size='1024*1024',  # 图片尺寸
-                api_key=self.api_key
-            )
-            
-            if response.status_code == 200:
-                # 获取图片URL
-                image_url = response.output['results'][0]['url']
-                """
-                response = {
-                    'status_code': 200,
-                    'output': {
-                        'results': [
-                            {
-                                'url': 'https://example.com/generated_image.jpg'
-                            }
-                        ]
-                    }
-                }
-                """
-                
-                # 下载图片
-                img_response = requests.get(image_url, timeout=30)
-                img = Image.open(BytesIO(img_response.content))
-                # 转换格式
-                
-                print(f"✅ 图像生成成功: {prompt[:50]}...")
-                return img
-            else:
-                print(f"❌ API调用失败: {response.message}")
-                # 返回一个空白图像作为fallback
-                return Image.new('RGB', (1024, 1024), color='gray')
-                
-        except Exception as e:
-            print(f"❌ 图像生成出错: {e}")
-            # 返回一个空白图像作为fallback
-            return Image.new('RGB', (1024, 1024), color='gray')
+        import random, math
+        attempt = 0
+        while attempt < self.max_retries:
+            # 限速：保证两次调用间隔 >= min_interval * adaptive_factor (模块级共享)
+            with GLOBAL_RATE_LOCK:
+                now = time.time()
+                wait_needed = (self.min_interval * self._adaptive_factor) - (now - GLOBAL_LAST_CALL_TIME)
+                if wait_needed > 0:
+                    time.sleep(wait_needed)
+                # 更新全局时间戳
+                globals()['GLOBAL_LAST_CALL_TIME'] = time.time()
+            try:
+                response = ImageSynthesis.call(
+                    model='wanx-v1',
+                    prompt=prompt,
+                    n=1,
+                    size='1024*1024',
+                    api_key=self.api_key
+                )
+                # 成功
+                if response.status_code == 200:
+                    image_url = response.output['results'][0]['url']
+                    img_response = requests.get(image_url, timeout=30)
+                    img = Image.open(BytesIO(img_response.content))
+                    print(f"✅ 图像生成成功: {prompt[:50]}...")
+                    # 成功后如果之前有429错误，逐步恢复速率
+                    if self._recent_429 > 0:
+                        self._recent_429 = max(0, self._recent_429 - 1)
+                        self._adaptive_factor = max(1.0, self._adaptive_factor * 0.85)
+                    return img
+                # 429 或速率限制
+                msg = getattr(response, 'message', '')
+                if response.status_code == 429 or 'Throttling.RateQuota' in msg:
+                    self._recent_429 += 1
+                    # 指数退避 + 抖动
+                    backoff = (self.base_backoff * (2 ** attempt)) + random.uniform(0, self.backoff_jitter)
+                    # 自适应提升调用间隔
+                    self._adaptive_factor = min(8.0, self._adaptive_factor * 1.4)
+                    print(f"⚠️ 触发速率限制(429)，等待 {backoff:.2f}s 后重试 (attempt {attempt+1}/{self.max_retries})")
+                    import time as _t
+                    _t.sleep(backoff)
+                    attempt += 1
+                    continue
+                else:
+                    print(f"❌ API调用失败: {msg}")
+                    break
+            except Exception as e:
+                # 网络或其他异常同样退避
+                backoff = (self.base_backoff * (2 ** attempt)) + random.uniform(0, self.backoff_jitter)
+                print(f"❌ 异常: {e}，退避 {backoff:.2f}s 后重试 (attempt {attempt+1}/{self.max_retries})")
+                import time as _t
+                _t.sleep(backoff)
+                attempt += 1
+        # 最终失败 fallback
+        print("⚠️ 使用占位图像作为回退")
+        return Image.new('RGB', (1024, 1024), color='gray')
     
     def _get_user_choice(self, prompt="请选择操作: ", valid_options=['1', '2', '3'], max_attempts=5):
         """获取并验证用户选择，支持自定义选项和最大尝试次数"""
@@ -1124,8 +1152,12 @@ class DashScopeImageAgent:
                     os.remove(tmp)
                 return str(final)
 
+            # 如果近期出现大量429，自动降级并发度
+            dynamic_concurrency = max(1, int(self.concurrency / (1 + self._recent_429)))
+            if dynamic_concurrency < self.concurrency:
+                print(f"⚠️ 检测到速率限制，自动降级并发度: {self.concurrency} -> {dynamic_concurrency}")
             futures = []
-            with ThreadPoolExecutor(max_workers=self.concurrency) as ex:
+            with ThreadPoolExecutor(max_workers=dynamic_concurrency) as ex:
                 for i, (pmt, page_text) in enumerate(zip(image_prompts_with_role_desc, params["pages"])):
                     futures.append(ex.submit(_worker, i, pmt, page_text))
                 completed = 0
